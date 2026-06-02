@@ -1,0 +1,18 @@
+server:
+  port: 8080
+
+app:
+  image:
+    max-bytes: 104857600
+    max-total-bytes-per-request: 524288000
+    max-items-per-request: 20
+    render-dpi: 300
+    max-raster-pixels: 40000000
+    user-agent: DtfGangsheet/1.0 (+https://your-domain.example)
+    http-max-attempts: 3
+    retry-delay-ms: 500
+    max-retry-delay-ms: 8000
+  pdf:
+    output-dir: data/output
+    sheet-width-inch: 22
+    bottom-padding-inch: 0.25
