@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -16,7 +17,7 @@ public class GlobalExceptionHandler {
     public Map<String, Object> handleIllegalArgument(IllegalArgumentException ex) {
         return Map.of(
                 "status", 400,
-                "message", ex.getMessage()
+                "message", safeMessage(ex, "Invalid request")
         );
     }
 
@@ -41,7 +42,7 @@ public class GlobalExceptionHandler {
     public Map<String, Object> handleImageLoad(ImageLoadException ex) {
         return Map.of(
                 "status", 400,
-                "message", ex.getMessage()
+                "message", safeMessage(ex, "Cannot load image")
         );
     }
 
@@ -50,7 +51,7 @@ public class GlobalExceptionHandler {
     public Map<String, Object> handleIo(IOException ex) {
         return Map.of(
                 "status", 500,
-                "message", ex.getMessage()
+                "message", safeMessage(ex, "I/O error while generating PDF")
         );
     }
 
@@ -59,7 +60,11 @@ public class GlobalExceptionHandler {
     public Map<String, Object> handleGeneric(Exception ex) {
         return Map.of(
                 "status", 500,
-                "message", ex.getMessage()
+                "message", safeMessage(ex, "Unexpected error")
         );
+    }
+
+    private String safeMessage(Throwable ex, String fallback) {
+        return Objects.requireNonNullElse(ex.getMessage(), fallback);
     }
 }
