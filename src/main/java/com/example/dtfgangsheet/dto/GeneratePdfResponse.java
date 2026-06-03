@@ -1,15 +1,17 @@
 package com.example.dtfgangsheet.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.util.List;
 
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record GeneratePdfResponse(
-        String message,
+        String id,
         String fileName,
-        String absolutePath,
+        String downloadUrl,
         int itemCount,
-        double sheetWidth,
-        double sheetHeight,
-        String unit,
+        PdfSheetResponse sheet,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
         List<String> warnings
 ) {
 }

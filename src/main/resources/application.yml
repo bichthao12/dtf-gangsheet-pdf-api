@@ -8,10 +8,11 @@ app:
     max-items-per-request: 20
     render-dpi: 300
     max-raster-pixels: 40000000
-    user-agent: DtfGangsheet/1.0 (+https://your-domain.example)
     http-max-attempts: 3
     retry-delay-ms: 500
     max-retry-delay-ms: 8000
+    max-input-raster-pixels: 200000000
+    temp-dir: data/tmp/images
   pdf:
     output-dir: data/output
     sheet-width-inch: 22

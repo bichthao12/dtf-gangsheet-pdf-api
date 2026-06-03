@@ -1,70 +1,127 @@
 package com.example.dtfgangsheet.exception;
 
+import com.example.dtfgangsheet.dto.ApiErrorDetail;
+import com.example.dtfgangsheet.dto.ApiResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
+import java.nio.file.NoSuchFileException;
+import java.util.List;
 import java.util.Objects;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(IllegalArgumentException.class)
-    public Map<String, Object> handleIllegalArgument(IllegalArgumentException ex) {
-        return Map.of(
-                "status", 400,
-                "message", safeMessage(ex, "Invalid request")
+    public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException ex) {
+        return buildError(
+                HttpStatus.BAD_REQUEST,
+                "BAD_REQUEST",
+                "Invalid request",
+                List.of(new ApiErrorDetail(null, safeMessage(ex, "Invalid request")))
         );
     }
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public Map<String, Object> handleValidation(MethodArgumentNotValidException ex) {
-        Map<String, String> errors = new HashMap<>();
+    public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException ex) {
+        List<ApiErrorDetail> errors = ex.getBindingResult()
+                .getFieldErrors()
+                .stream()
+                .map(error -> new ApiErrorDetail(
+                        normalizeField(error.getField()),
+                        error.getDefaultMessage()
+                ))
+                .toList();
 
-        ex.getBindingResult().getFieldErrors().forEach(error ->
-                errors.put(error.getField(), error.getDefaultMessage())
-        );
-
-        return Map.of(
-                "status", 400,
-                "message", "Validation failed",
-                "errors", errors
+        return buildError(
+                HttpStatus.BAD_REQUEST,
+                "VALIDATION_ERROR",
+                "Validation failed",
+                errors
         );
     }
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(ImageLoadException.class)
-    public Map<String, Object> handleImageLoad(ImageLoadException ex) {
-        return Map.of(
-                "status", 400,
-                "message", safeMessage(ex, "Cannot load image")
+    public ResponseEntity<ApiResponse<Void>> handleImageLoad(ImageLoadException ex) {
+        return buildError(
+                HttpStatus.BAD_REQUEST,
+                "IMAGE_LOAD_ERROR",
+                "Cannot load image",
+                List.of(new ApiErrorDetail(null, safeMessage(ex, "Cannot load image")))
         );
     }
 
-    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+    @ExceptionHandler(NoSuchFileException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNotFound(NoSuchFileException ex) {
+        return buildError(
+                HttpStatus.NOT_FOUND,
+                "PDF_NOT_FOUND",
+                "PDF not found",
+                null
+        );
+    }
+
     @ExceptionHandler(IOException.class)
-    public Map<String, Object> handleIo(IOException ex) {
-        return Map.of(
-                "status", 500,
-                "message", safeMessage(ex, "I/O error while generating PDF")
+    public ResponseEntity<ApiResponse<Void>> handleIo(IOException ex) {
+        log.error("I/O error while generating PDF", ex);
+        return buildError(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "PDF_IO_ERROR",
+                "I/O error while generating PDF",
+                null
         );
     }
 
-    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    @ExceptionHandler(Exception.class)
-    public Map<String, Object> handleGeneric(Exception ex) {
-        return Map.of(
-                "status", 500,
-                "message", safeMessage(ex, "Unexpected error")
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(HttpMessageNotReadableException ex) {
+        return buildError(
+                HttpStatus.BAD_REQUEST,
+                "INVALID_JSON",
+                "Malformed request body",
+                List.of(new ApiErrorDetail(null, "Request body must be valid JSON"))
         );
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiResponse<Void>> handleGeneric(Exception ex) {
+        log.error("Unexpected error", ex);
+        return buildError(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "INTERNAL_SERVER_ERROR",
+                "Unexpected error",
+                null
+        );
+    }
+
+    private ResponseEntity<ApiResponse<Void>> buildError(
+            HttpStatus status,
+            String code,
+            String message,
+            List<ApiErrorDetail> errors
+    ) {
+        return ResponseEntity
+                .status(status)
+                .body(ApiResponse.error(code, message, errors));
     }
 
     private String safeMessage(Throwable ex, String fallback) {
         return Objects.requireNonNullElse(ex.getMessage(), fallback);
+    }
+
+    private String normalizeField(String field) {
+        return field
+                .replaceFirst("^generatePdf\\.", "")
+                .replaceFirst("^arg0\\.", "")
+                .replaceFirst("^arg0", "")
+                .replaceFirst("^items\\.", "")
+                .replaceFirst("^items", "");
     }
 }
