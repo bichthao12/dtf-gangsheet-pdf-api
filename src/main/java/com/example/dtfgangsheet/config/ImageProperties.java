@@ -18,6 +18,8 @@ public record ImageProperties(
         @PositiveOrZero long retryDelayMs,
         @PositiveOrZero long maxRetryDelayMs,
         @Positive long maxInputRasterPixels,
-        @NotBlank String tempDir
+        @NotBlank String tempDir,
+        @Positive int maxItemSizeInch,
+        @Positive int maxPositionInch
 ) {
 }

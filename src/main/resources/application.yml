@@ -4,7 +4,7 @@ server:
 app:
   image:
     max-bytes: 104857600
-    max-total-bytes-per-request: 524288000
+    max-total-bytes-per-request: 1000000000
     max-items-per-request: 20
     render-dpi: 300
     max-raster-pixels: 40000000
@@ -13,6 +13,8 @@ app:
     max-retry-delay-ms: 8000
     max-input-raster-pixels: 200000000
     temp-dir: data/tmp/images
+    max-item-size-inch: 120
+    max-position-inch: 10000
   pdf:
     output-dir: data/output
     sheet-width-inch: 22

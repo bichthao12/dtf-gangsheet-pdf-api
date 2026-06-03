@@ -62,6 +62,10 @@ public class GangSheetPdfService {
 
     private final int maxItemsPerRequest;
 
+    private final int maxItemSizeInch;
+
+    private final int maxPositionInch;
+
     public GangSheetPdfService(
             AssetStorageService assetStorageService,
             ImageProperties imageProps,
@@ -75,6 +79,8 @@ public class GangSheetPdfService {
         this.maxRasterPixels = imageProps.maxRasterPixels();
         this.maxTotalBytesPerRequest = imageProps.maxTotalBytesPerRequest();
         this.maxItemsPerRequest = imageProps.maxItemsPerRequest();
+        this.maxItemSizeInch = imageProps.maxItemSizeInch();
+        this.maxPositionInch = imageProps.maxPositionInch();
     }
 
     public GeneratePdfResponse generate(List<GangSheetItemRequest> items) throws IOException {
@@ -105,7 +111,7 @@ public class GangSheetPdfService {
             long tLoaded = System.nanoTime();
 
             long tSaved;
-            try (PDDocument document = new PDDocument(IOUtils.createMemoryOnlyStreamCache())) {
+            try (PDDocument document = new PDDocument(IOUtils.createTempFileOnlyStreamCache())) {
                 PDPage page = new PDPage(new PDRectangle(pageWidthPt, pageHeightPt));
                 document.addPage(page);
                 Map<String, PDImageXObject> pdfImagesBySource = new HashMap<>();
@@ -115,6 +121,9 @@ public class GangSheetPdfService {
                         GangSheetItemRequest item = items.get(i);
                         ImageAsset imageAsset = imageAssets.get(i);
 
+                        if (imageAsset == null) {
+                            throw new IllegalStateException("Image asset was not loaded at index " + i);
+                        }
                         addDpiWarningIfNeeded(
                                 warnings,
                                 imageAsset,
@@ -151,7 +160,7 @@ public class GangSheetPdfService {
                 document.save(outputPath.toFile());
                 tSaved = System.nanoTime();
 
-                log.info(
+                log.debug(
                         "PDF timing: load={}ms embed={}ms save={}ms total={}ms items={}",
                         (tLoaded - tStart) / 1_000_000,
                         (tEmbedded - tLoaded) / 1_000_000,
@@ -281,12 +290,19 @@ public class GangSheetPdfService {
     }
 
     private String buildPdfImageCacheKey(ImageAsset imageAsset, GangSheetItemRequest item) {
+        String pathKey = imageAsset.path()
+                .toAbsolutePath()
+                .normalize()
+                .toString();
+
         if (imageAsset.format() == ImageAsset.ImageFormat.JPEG) {
-            return imageAsset.source();
+            return "JPEG|" + pathKey;
         }
 
         RenderSize renderSize = calculateRenderSize(imageAsset, item);
-        return imageAsset.source()
+
+        return "OTHER|"
+                + pathKey
                 + "#"
                 + renderSize.width()
                 + "x"
@@ -315,48 +331,60 @@ public class GangSheetPdfService {
     }
 
     private List<ImageAsset> loadImages(List<GangSheetItemRequest> items) throws IOException {
-        LinkedHashMap<String, CompletableFuture<ImageAsset>> futuresByPath = new LinkedHashMap<>();
+        LinkedHashMap<String, CompletableFuture<ImageAsset>> futuresBySource = new LinkedHashMap<>();
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (GangSheetItemRequest item : items) {
-                futuresByPath.computeIfAbsent(
+                futuresBySource.computeIfAbsent(
                         item.img(),
-                        src -> CompletableFuture.supplyAsync(() -> loadAssetWithTiming(src), executor)
+                        source -> CompletableFuture.supplyAsync(
+                                () -> loadAssetWithTiming(source),
+                                executor
+                        )
                 );
             }
-        }
 
-        Map<String, ImageAsset> imagesByPath = new HashMap<>(futuresByPath.size());
-        List<ImageAsset> loaded = new ArrayList<>();
-        Exception failure = null;
+            Map<String, ImageAsset> imagesBySource = new HashMap<>(futuresBySource.size());
+            List<ImageAsset> loadedUniqueAssets = new ArrayList<>();
+            Exception failure = null;
 
-        for (Map.Entry<String, CompletableFuture<ImageAsset>> entry : futuresByPath.entrySet()) {
-            try {
-                ImageAsset asset = joinImageFuture(entry.getValue(), entry.getKey());
-                imagesByPath.put(entry.getKey(), asset);
-                loaded.add(asset);
-            } catch (IOException | RuntimeException ex) {
-                if (failure == null) {
-                    failure = ex;
+            for (Map.Entry<String, CompletableFuture<ImageAsset>> entry : futuresBySource.entrySet()) {
+                try {
+                    ImageAsset asset = joinImageFuture(entry.getValue(), entry.getKey());
+                    imagesBySource.put(entry.getKey(), asset);
+                    loadedUniqueAssets.add(asset);
+                } catch (IOException | RuntimeException ex) {
+                    if (failure == null) {
+                        failure = ex;
+                    }
                 }
             }
-        }
 
-        if (failure != null) {
-            assetStorageService.cleanupTempAssets(loaded);
-            if (failure instanceof IOException io) {
-                throw io;
+            if (failure != null) {
+                assetStorageService.cleanupTempAssets(loadedUniqueAssets);
+
+                if (failure instanceof IOException ioException) {
+                    throw ioException;
+                }
+
+                throw (RuntimeException) failure;
             }
-            throw (RuntimeException) failure;
-        }
 
-        List<ImageAsset> sourceImages = new ArrayList<>(items.size());
-        for (GangSheetItemRequest item : items) {
-            sourceImages.add(imagesByPath.get(item.img()));
+            List<ImageAsset> sourceImages = new ArrayList<>(items.size());
+
+            for (GangSheetItemRequest item : items) {
+                ImageAsset imageAsset = imagesBySource.get(item.img());
+
+                if (imageAsset == null) {
+                    throw new IllegalStateException("Image was not loaded: " + item.img());
+                }
+
+                sourceImages.add(imageAsset);
+            }
+
+            return sourceImages;
         }
-        return sourceImages;
     }
-
     private ImageAsset loadAssetWithTiming(String source) {
         try {
             long t0 = System.nanoTime();
@@ -497,6 +525,18 @@ public class GangSheetPdfService {
         if (item.width() <= 0 || item.height() <= 0) {
             throw new IllegalArgumentException(
                     "Item at index " + index + " must have width/height > 0"
+            );
+        }
+
+        if (item.width() > maxItemSizeInch || item.height() > maxItemSizeInch) {
+            throw new IllegalArgumentException(
+                    "Item at index " + index + " exceeds max item size"
+            );
+        }
+
+        if (item.x() > maxPositionInch || item.y() > maxPositionInch) {
+            throw new IllegalArgumentException(
+                    "Item at index " + index + " exceeds max position"
             );
         }
     }
