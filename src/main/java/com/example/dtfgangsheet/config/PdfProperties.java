@@ -11,5 +11,8 @@ import org.springframework.validation.annotation.Validated;
 public record PdfProperties(
         @NotBlank String outputDir,
         @Positive double sheetWidthInch,
-        @PositiveOrZero double bottomPaddingInch
+        @PositiveOrZero double rightPaddingInch,
+        @PositiveOrZero double bottomPaddingInch,
+        @PositiveOrZero double itemGapInch
+
 ) { }

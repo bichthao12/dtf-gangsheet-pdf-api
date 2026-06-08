@@ -26,7 +26,10 @@ app:
   pdf:
     output-dir: ${APP_PDF_OUTPUT_DIR:data/output}
     sheet-width-inch: ${APP_PDF_SHEET_WIDTH_INCH:22}
+    right-padding-inch: ${APP_PDF_RIGHT_PADDING_INCH:5}
     bottom-padding-inch: ${APP_PDF_BOTTOM_PADDING_INCH:0.25}
+    item-gap-inch: ${APP_PDF_ITEM_GAP_INCH:0.1}
+
 
 logging:
   level:

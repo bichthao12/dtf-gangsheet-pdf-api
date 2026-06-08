@@ -53,6 +53,8 @@ public class GangSheetPdfService {
 
     private final double sheetWidthInch;
 
+    private final double rightPaddingInch;
+
     private final double bottomPaddingInch;
 
     private final int imageRenderDpi;
@@ -77,6 +79,7 @@ public class GangSheetPdfService {
         this.assetStorageService = assetStorageService;
         this.outputDir = pdfProps.outputDir();
         this.sheetWidthInch = pdfProps.sheetWidthInch();
+        this.rightPaddingInch = pdfProps.rightPaddingInch();
         this.bottomPaddingInch = pdfProps.bottomPaddingInch();
         this.imageRenderDpi = imageProps.renderDpi();
         this.maxRasterPixels = imageProps.maxRasterPixels();
@@ -156,8 +159,21 @@ public class GangSheetPdfService {
      */
     private SheetLayout computeLayout(List<GangSheetItemRequest> items) {
         double heightInch = calculateSheetHeight(items);
-        validateItemsInsideSheet(items, sheetWidthInch, heightInch);
+        double printableWidthInch = calculatePrintableWidthInch();
+        validateItemsInsideSheet(items, printableWidthInch, heightInch);
         return new SheetLayout(sheetWidthInch, heightInch);
+    }
+
+    private double calculatePrintableWidthInch() {
+        double printableWidthInch = sheetWidthInch - rightPaddingInch;
+
+        if (printableWidthInch <= 0) {
+            throw new IllegalArgumentException(
+                    "rightPaddingInch must be smaller than sheetWidthInch"
+            );
+        }
+
+        return printableWidthInch;
     }
 
     private void buildPdf(
