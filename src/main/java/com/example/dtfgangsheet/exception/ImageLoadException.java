@@ -1,6 +1,6 @@
 package com.example.dtfgangsheet.exception;
 
-import com.example.dtfgangsheet.dto.ApiResultCode;
+import com.example.dtfgangsheet.dto.common.ApiResultCode;
 import org.springframework.http.HttpStatus;
 
 public class ImageLoadException extends AppException {
@@ -13,8 +13,12 @@ public class ImageLoadException extends AppException {
         super(ApiResultCode.IMAGE_LOAD_ERROR, HttpStatus.BAD_REQUEST, cause);
     }
 
-    // constructor cho subclass override ApiResultCode
     protected ImageLoadException(ApiResultCode resultCode, HttpStatus httpStatus, String detail) {
         super(resultCode, httpStatus, detail);
+    }
+
+    protected ImageLoadException(ApiResultCode resultCode, HttpStatus httpStatus,
+                                 String detail, Throwable cause) {
+        super(resultCode, httpStatus, detail, cause);  // gọi đúng AppException constructor 4 params
     }
 }

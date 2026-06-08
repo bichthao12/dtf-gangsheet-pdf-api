@@ -1,7 +1,7 @@
 package com.example.dtfgangsheet.exception;
 
-import com.example.dtfgangsheet.dto.ApiErrorDetail;
-import com.example.dtfgangsheet.dto.ApiResultCode;
+import com.example.dtfgangsheet.dto.common.ApiErrorDetail;
+import com.example.dtfgangsheet.dto.common.ApiResultCode;
 import lombok.Getter;
 import org.springframework.http.HttpStatus;
 

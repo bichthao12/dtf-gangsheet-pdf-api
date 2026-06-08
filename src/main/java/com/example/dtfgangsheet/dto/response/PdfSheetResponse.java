@@ -1,4 +1,4 @@
-package com.example.dtfgangsheet.dto;
+package com.example.dtfgangsheet.dto.response;
 
 public record PdfSheetResponse(
         double width,

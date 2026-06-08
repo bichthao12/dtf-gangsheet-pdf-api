@@ -1,4 +1,4 @@
-package com.example.dtfgangsheet.dto;
+package com.example.dtfgangsheet.dto.common;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -24,8 +24,8 @@ public enum ApiResultCode {
     INVALID_GANG_SHEET_LAYOUT("MGS_14", "Invalid gang sheet layout"),
 
     // Server errors
-    PDF_IO_ERROR     ("MGS_7", "I/O error while generating PDF"),
-    INTERNAL_ERROR   ("MGS_8", "Unexpected error");
+    PDF_IO_ERROR     ("MGS_8", "I/O error while generating PDF"),
+    INTERNAL_ERROR   ("MGS_9", "Unexpected error");
 
     private final String code;
     private final String message;

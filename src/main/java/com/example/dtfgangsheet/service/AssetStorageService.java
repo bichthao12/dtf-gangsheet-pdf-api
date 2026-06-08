@@ -1,7 +1,7 @@
 package com.example.dtfgangsheet.service;
 
 import com.example.dtfgangsheet.config.ImageProperties;
-import com.example.dtfgangsheet.dto.ImageAsset;
+import com.example.dtfgangsheet.model.ImageAsset;
 import com.example.dtfgangsheet.exception.*;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -29,7 +29,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 @Service
-public class AssetStorageService {
+public class AssetStorageService implements ImageStorage {
 
     private static final Logger log = LoggerFactory.getLogger(AssetStorageService.class);
 
@@ -266,11 +266,22 @@ public class AssetStorageService {
         return totalBytesRead;
     }
 
+    @Override
+    public ImageAsset load(String source) {
+        return loadAsset(source);
+    }
+
+    @Override
+    public void cleanup(List<ImageAsset> assets) {
+        cleanupTempAssets(assets);
+    }
+
     /**
      * Returns the file size in bytes if cheaply available (local files only);
      * -1 for HTTP URLs or paths that are not regular files. Used for pre-flight
      * total-size budgeting without performing a download or read.
      */
+    @Override
     public long peekLocalSize(String img) {
         if (img == null || img.isBlank() || isHttpUrl(img)) return -1L;
         Path path = Path.of(img).normalize();
@@ -285,6 +296,7 @@ public class AssetStorageService {
     /**
      * Decodes an image at a target render size to limit memory usage.
      */
+    @Override
     public BufferedImage decodeForRender(
             ImageAsset imageAsset,
             int targetWidth,
@@ -476,14 +488,6 @@ public class AssetStorageService {
             }
         }
         return false;
-    }
-
-    private String bytesToHex(byte[] bytes, int len) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < len; i++) {
-            sb.append(String.format("%02X ", bytes[i]));
-        }
-        return sb.toString().trim();
     }
 
     private ImageSize readImageSize(Path path, String source, ImageAsset.ImageFormat format) throws IOException {

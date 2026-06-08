@@ -1,8 +1,7 @@
-package com.example.dtfgangsheet.dto;
+package com.example.dtfgangsheet.dto.common;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 

@@ -1,25 +1,23 @@
 package com.example.dtfgangsheet.controller;
 
-import com.example.dtfgangsheet.dto.ApiResponse;
-import com.example.dtfgangsheet.dto.ApiResultCode;
-import com.example.dtfgangsheet.dto.GangSheetItemRequest;
-import com.example.dtfgangsheet.dto.GeneratePdfResponse;
+import com.example.dtfgangsheet.dto.common.ApiResponse;
+import com.example.dtfgangsheet.dto.common.ApiResultCode;
+import com.example.dtfgangsheet.dto.request.GangSheetItemRequest;
+import com.example.dtfgangsheet.dto.response.GeneratePdfResponse;
 import com.example.dtfgangsheet.service.GangSheetPdfService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
-import org.springframework.core.io.PathResource;
-import org.springframework.core.io.Resource;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.io.IOException;
-import java.nio.file.Path;
 import java.util.List;
 
+@Validated
 @RestController
 @RequestMapping("/api/gang-sheets")
 public class GangSheetController {
@@ -34,14 +32,11 @@ public class GangSheetController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<GeneratePdfResponse> generatePdf(
             @Valid @RequestBody List<@NotNull @Valid GangSheetItemRequest> items
-    ) throws IOException {
-
-        GeneratePdfResponse response = gangSheetPdfService.generate(items);
-
+    ) {
         return ApiResponse.success(
                 ApiResultCode.PDF_CREATED.getCode(),
                 ApiResultCode.PDF_CREATED.getMessage(),
-                response
+                gangSheetPdfService.generate(items)
         );
     }
 }

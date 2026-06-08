@@ -1,4 +1,4 @@
-package com.example.dtfgangsheet.dto;
+package com.example.dtfgangsheet.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.validation.constraints.NotBlank;

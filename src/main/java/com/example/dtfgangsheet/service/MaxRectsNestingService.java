@@ -2,11 +2,12 @@ package com.example.dtfgangsheet.service;
 
 import com.example.dtfgangsheet.config.ImageProperties;
 import com.example.dtfgangsheet.config.PdfProperties;
-import com.example.dtfgangsheet.dto.GangSheetItemRequest;
-import com.example.dtfgangsheet.dto.ImageAsset;
-import com.example.dtfgangsheet.dto.NestingRequest;
-import com.example.dtfgangsheet.dto.NestingResponse;
-import com.example.dtfgangsheet.dto.PdfSheetResponse;
+import com.example.dtfgangsheet.model.GangSheetItem;
+import com.example.dtfgangsheet.dto.request.NestingRequest;
+import com.example.dtfgangsheet.dto.response.NestingResponse;
+import com.example.dtfgangsheet.dto.response.PdfSheetResponse;
+import com.example.dtfgangsheet.model.ImageAsset;
+import com.example.dtfgangsheet.model.NestingInput;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -35,7 +36,7 @@ public class MaxRectsNestingService {
         this.renderDpi         = imageProps.renderDpi();
     }
 
-    public NestingResponse nest(List<NestingRequest> requests, List<ImageAsset> assets) {
+    public NestingResponse nest(List<NestingInput> requests, List<ImageAsset> assets) {
         List<Slot> slots = buildSlots(requests, assets);
 
         log.debug("Nesting: {} slots from {} requests, usableWidth={}in sheetWidth={}in gap={}in",
@@ -83,11 +84,11 @@ public class MaxRectsNestingService {
     // Build slots
     // -------------------------------------------------------------------------
 
-    private List<Slot> buildSlots(List<NestingRequest> requests, List<ImageAsset> assets) {
+    private List<Slot> buildSlots(List<NestingInput> requests, List<ImageAsset> assets) {
         List<Slot> slots = new ArrayList<>();
 
         for (int i = 0; i < requests.size(); i++) {
-            NestingRequest req   = requests.get(i);
+            NestingInput req   = requests.get(i);
             ImageAsset     asset = assets.get(i);
 
             double w = req.width();
@@ -230,8 +231,8 @@ public class MaxRectsNestingService {
                 String.format("%.1f", usagePct),
                 rotatedCount);
 
-        List<GangSheetItemRequest> items = placed.stream()
-                .map(p -> new GangSheetItemRequest(
+        List<GangSheetItem> items = placed.stream()
+                .map(p -> new GangSheetItem(
                         p.source(),
                         p.x(),
                         p.y(),

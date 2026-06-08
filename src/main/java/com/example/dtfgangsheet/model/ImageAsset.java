@@ -1,4 +1,4 @@
-package com.example.dtfgangsheet.dto;
+package com.example.dtfgangsheet.model;
 
 import java.nio.file.Path;
 

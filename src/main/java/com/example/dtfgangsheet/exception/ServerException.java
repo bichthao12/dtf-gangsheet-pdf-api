@@ -1,6 +1,6 @@
 package com.example.dtfgangsheet.exception;
 
-import com.example.dtfgangsheet.dto.ApiResultCode;
+import com.example.dtfgangsheet.dto.common.ApiResultCode;
 import org.springframework.http.HttpStatus;
 
 public class ServerException extends AppException {

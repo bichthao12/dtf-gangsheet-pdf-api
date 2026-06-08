@@ -1,9 +1,9 @@
 package com.example.dtfgangsheet.controller;
 
-import com.example.dtfgangsheet.dto.ApiResponse;
-import com.example.dtfgangsheet.dto.ApiResultCode;
-import com.example.dtfgangsheet.dto.GeneratePdfResponse;
-import com.example.dtfgangsheet.dto.NestingRequest;
+import com.example.dtfgangsheet.dto.common.ApiResponse;
+import com.example.dtfgangsheet.dto.common.ApiResultCode;
+import com.example.dtfgangsheet.dto.response.GeneratePdfResponse;
+import com.example.dtfgangsheet.dto.request.NestingRequest;
 import com.example.dtfgangsheet.service.NestingService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;

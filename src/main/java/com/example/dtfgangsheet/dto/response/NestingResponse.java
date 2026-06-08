@@ -1,12 +1,14 @@
-package com.example.dtfgangsheet.dto;
+package com.example.dtfgangsheet.dto.response;
 
+import com.example.dtfgangsheet.model.GangSheetItem;
 import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.util.List;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record NestingResponse(
 
-        List<GangSheetItemRequest> items,
+        List<GangSheetItem> items,
         PdfSheetResponse sheet,
         NestingStats stats
 
