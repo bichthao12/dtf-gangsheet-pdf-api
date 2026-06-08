@@ -13,7 +13,10 @@ public record ImageAsset(
 ) {
 
     public enum ImageFormat {
-        JPEG,
+        PNG,
+        GIF,
+        WEBP,
+        AVIF,
         OTHER
     }
 }

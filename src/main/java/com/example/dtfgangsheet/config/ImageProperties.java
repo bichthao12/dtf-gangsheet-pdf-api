@@ -20,6 +20,12 @@ public record ImageProperties(
         @Positive long maxInputRasterPixels,
         @NotBlank String tempDir,
         @Positive int maxItemSizeInch,
-        @Positive int maxPositionInch
+        @Positive int maxPositionInch,
+        @Positive int warningDpi,
+        @PositiveOrZero int connectTimeoutMs,
+        @PositiveOrZero int readTimeoutMs,
+        @NotBlank String userAgent,
+        @NotBlank String ffmpegPath,
+        @NotBlank String ffprobePath
 ) {
 }

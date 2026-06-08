@@ -2,10 +2,8 @@ package com.example.dtfgangsheet.service;
 
 import com.example.dtfgangsheet.config.ImageProperties;
 import com.example.dtfgangsheet.config.PdfProperties;
-import com.example.dtfgangsheet.dto.GangSheetItemRequest;
-import com.example.dtfgangsheet.dto.GeneratePdfResponse;
-import com.example.dtfgangsheet.dto.ImageAsset;
-import com.example.dtfgangsheet.dto.PdfSheetResponse;
+import com.example.dtfgangsheet.dto.*;
+import com.example.dtfgangsheet.exception.*;
 import org.apache.pdfbox.io.IOUtils;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -17,8 +15,10 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.util.Matrix;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,6 +26,7 @@ import java.nio.file.NoSuchFileException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -44,7 +45,7 @@ public class GangSheetPdfService {
 
     private static final Logger log = LoggerFactory.getLogger(GangSheetPdfService.class);
     private static final double POINT_PER_INCH = 72.0;
-    private static final int DEFAULT_WARNING_DPI = 150;
+    private static final double EPSILON_INCH = 0.0001;
 
     private final AssetStorageService assetStorageService;
 
@@ -66,6 +67,8 @@ public class GangSheetPdfService {
 
     private final int maxPositionInch;
 
+    private final int warningDpi;
+
     public GangSheetPdfService(
             AssetStorageService assetStorageService,
             ImageProperties imageProps,
@@ -81,129 +84,160 @@ public class GangSheetPdfService {
         this.maxItemsPerRequest = imageProps.maxItemsPerRequest();
         this.maxItemSizeInch = imageProps.maxItemSizeInch();
         this.maxPositionInch = imageProps.maxPositionInch();
-    }
-
-    public GeneratePdfResponse generate(List<GangSheetItemRequest> items) throws IOException {
-        long tStart = System.nanoTime();
-
-        validateRequest(items);
-        validateItemsForSheetCalculation(items);
-        enforceLocalSizeBudget(items);
-
-        double sheetHeightInch = calculateSheetHeight(items);
-        validateItemsInsideSheet(items, sheetWidthInch, sheetHeightInch);
-
-        float pageWidthPt = inchToPoint(sheetWidthInch);
-        float pageHeightPt = inchToPoint(sheetHeightInch);
-
-        String id = UUID.randomUUID().toString();
-        String fileName = buildOutputFileName(id);
-
-        Path outputDirectory = Path.of(outputDir);
-        Files.createDirectories(outputDirectory);
-
-        Path outputPath = outputDirectory.resolve(fileName).normalize();
-
-        List<String> warnings = new ArrayList<>();
-        List<ImageAsset> imageAssets = loadImages(items);
-        try {
-            enforceLoadedSizeBudget(imageAssets);
-            long tLoaded = System.nanoTime();
-
-            long tSaved;
-            try (PDDocument document = new PDDocument(IOUtils.createTempFileOnlyStreamCache())) {
-                PDPage page = new PDPage(new PDRectangle(pageWidthPt, pageHeightPt));
-                document.addPage(page);
-                Map<String, PDImageXObject> pdfImagesBySource = new HashMap<>();
-
-                try (PDPageContentStream contentStream = new PDPageContentStream(document, page)) {
-                    for (int i = 0; i < items.size(); i++) {
-                        GangSheetItemRequest item = items.get(i);
-                        ImageAsset imageAsset = imageAssets.get(i);
-
-                        if (imageAsset == null) {
-                            throw new IllegalStateException("Image asset was not loaded at index " + i);
-                        }
-                        addDpiWarningIfNeeded(
-                                warnings,
-                                imageAsset,
-                                item,
-                                i
-                        );
-
-                        long tEmbedItem = System.nanoTime();
-                        PDImageXObject pdfImage = getOrCreatePdfImage(
-                                document,
-                                pdfImagesBySource,
-                                imageAsset,
-                                item
-                        );
-                        long embedItemMs = (System.nanoTime() - tEmbedItem) / 1_000_000;
-                        log.info(
-                                "embedded image {}/{}: {}ms src={}",
-                                i + 1,
-                                items.size(),
-                                embedItemMs,
-                                imageAsset.source()
-                        );
-
-                        drawItemExactlyByFeLayout(
-                                contentStream,
-                                pdfImage,
-                                item,
-                                sheetHeightInch
-                        );
-                    }
-                }
-                long tEmbedded = System.nanoTime();
-
-                document.save(outputPath.toFile());
-                tSaved = System.nanoTime();
-
-                log.debug(
-                        "PDF timing: load={}ms embed={}ms save={}ms total={}ms items={}",
-                        (tLoaded - tStart) / 1_000_000,
-                        (tEmbedded - tLoaded) / 1_000_000,
-                        (tSaved - tEmbedded) / 1_000_000,
-                        (tSaved - tStart) / 1_000_000,
-                        items.size()
-                );
-            }
-
-            return new GeneratePdfResponse(
-                    id,
-                    fileName,
-                    buildDownloadUrl(id),
-                    items.size(),
-                    new PdfSheetResponse(sheetWidthInch, sheetHeightInch, "INCH"),
-                    warnings.isEmpty() ? null : warnings
-            );
-        } finally {
-            assetStorageService.cleanupTempAssets(imageAssets);
-        }
-    }
-
-    public Path resolveGeneratedPdf(String id) throws IOException {
-        String normalizedId = normalizePdfId(id);
-        Path outputDirectory = Path.of(outputDir);
-        Path resolvedPath = outputDirectory
-                .resolve(buildOutputFileName(normalizedId))
-                .normalize();
-
-        if (!Files.exists(resolvedPath) || !Files.isRegularFile(resolvedPath)) {
-            throw new NoSuchFileException("PDF not found for id: " + normalizedId);
-        }
-
-        return resolvedPath;
+        warningDpi = imageProps.warningDpi();
     }
 
     /**
-     * FE chịu trách nhiệm layout và giữ aspect ratio.
-     * BE chỉ render đúng tuyệt đối theo:
-     * x, y, width, height, rotation.
-     * x, y, width, height tính theo inch.
-     * x, y là top-left.
-     * rotation xoay quanh tâm box.
+     * Generates a gang sheet PDF from the requested items.
+     */
+    public GeneratePdfResponse generate(List<GangSheetItemRequest> items) {
+        long tStart = System.nanoTime();
+
+        validateInputs(items);
+        SheetLayout layout = computeLayout(items);
+
+        String id = UUID.randomUUID().toString();
+        String name = buildOutputFileName(id);
+        Path output = Path.of(outputDir).resolve(name).normalize();
+
+        List<ImageAsset> assets = null;
+        try {
+            assets = loadImages(items);
+            enforceLoadedSizeBudget(assets);
+            long tLoaded = System.nanoTime();
+
+            List<String> warnings = new ArrayList<>();
+            buildPdf(output, layout, items, assets, warnings);
+
+            log.debug("PDF: load={}ms build={}ms total={}ms items={}",
+                    ms(tLoaded - tStart),
+                    ms(System.nanoTime() - tLoaded),
+                    ms(System.nanoTime() - tStart),
+                    items.size());
+
+            return new GeneratePdfResponse(
+                    id, name, buildDownloadUrl(id), items.size(),
+                    new PdfSheetResponse(layout.widthInch(), layout.heightInch(), "INCH"),
+                    warnings.isEmpty() ? null : warnings
+            );
+        } catch (IOException e) {
+            try {
+                Files.deleteIfExists(output);
+            } catch (IOException cleanupError) {
+                log.warn("Failed to delete partial PDF: id={} outputPath={}",
+                        id, output, cleanupError);
+            }
+
+            log.error("PDF generation failed: id={} outputPath={} items={}",
+                    id, output, items.size(), e);
+
+            throw new ServerException(ApiResultCode.PDF_GENERATION_FAILED);
+
+        } finally {
+            try {
+                assetStorageService.cleanupTempAssets(assets);
+            } catch (Exception cleanupError) {
+                log.warn("Failed to cleanup temp image assets: id={}", id, cleanupError);
+            }
+        }
+    }
+
+    /**
+     * Validates request-level limits before doing any image I/O.
+     */
+    private void validateInputs(List<GangSheetItemRequest> items) {
+        validateRequest(items);
+        validateItemsForSheetCalculation(items);
+        enforceLocalSizeBudget(items);
+    }
+
+    /**
+     * Computes sheet height and validates that all items fit the sheet.
+     */
+    private SheetLayout computeLayout(List<GangSheetItemRequest> items) {
+        double heightInch = calculateSheetHeight(items);
+        validateItemsInsideSheet(items, sheetWidthInch, heightInch);
+        return new SheetLayout(sheetWidthInch, heightInch);
+    }
+
+    private void buildPdf(
+            Path outputPath,
+            SheetLayout layout,
+            List<GangSheetItemRequest> items,
+            List<ImageAsset> assets,
+            List<String> warnings
+    ) throws IOException {
+        Path parent = outputPath.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+
+        Path tempOutput = outputPath.resolveSibling(
+                outputPath.getFileName() + ".tmp"
+        );
+
+        long t0 = System.nanoTime();
+
+        try {
+            try (PDDocument doc = new PDDocument(IOUtils.createTempFileOnlyStreamCache())) {
+                PDPage page = new PDPage(
+                        new PDRectangle(layout.widthPt(), layout.heightPt())
+                );
+                doc.addPage(page);
+
+                Map<String, PDImageXObject> imageCache = new HashMap<>();
+
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    embedItems(cs, doc, layout, items, assets, imageCache, warnings);
+                }
+
+                long tEmbedded = System.nanoTime();
+
+                doc.save(tempOutput.toFile());
+
+                Files.move(
+                        tempOutput,
+                        outputPath,
+                        StandardCopyOption.REPLACE_EXISTING
+                );
+
+                long tSaved = System.nanoTime();
+
+                log.debug("PDF build: embed={}ms save={}ms total={}ms items={} outputPath={}",
+                        ms(tEmbedded - t0),
+                        ms(tSaved - tEmbedded),
+                        ms(tSaved - t0),
+                        items.size(),
+                        outputPath);
+            }
+        } catch (IOException e) {
+            Files.deleteIfExists(tempOutput);
+            throw e;
+        }
+    }
+
+    private void embedItems(PDPageContentStream cs, PDDocument doc, SheetLayout layout, List<GangSheetItemRequest> items,
+                            List<ImageAsset> assets, Map<String, PDImageXObject> imageCache, List<String> warnings) throws IOException {
+        for (int i = 0; i < items.size(); i++) {
+            GangSheetItemRequest item = items.get(i);
+            ImageAsset asset = assets.get(i);
+
+            addDpiWarningIfNeeded(warnings, asset, item, i);
+
+            long t0 = System.nanoTime();
+            PDImageXObject pdfImage = getOrCreatePdfImage(doc, imageCache, asset, item);
+            log.debug("embedded image {}/{}: {}ms src={}", i + 1, items.size(), ms(System.nanoTime() - t0), asset.source());
+
+            drawItemExactlyByFeLayout(cs, pdfImage, item, layout.heightInch());
+        }
+    }
+
+    private String buildDownloadUrl(String id) {
+        return "/api/gang-sheets/" + id + "/download";
+    }
+
+    /**
+     * Draws one image in PDF coordinates using the exact FE layout.
      */
     private void drawItemExactlyByFeLayout(
             PDPageContentStream contentStream,
@@ -250,6 +284,16 @@ public class GangSheetPdfService {
         }
     }
 
+    private double normalizeRotation(double rotationDegree) {
+        double normalized = rotationDegree % 360;
+
+        if (normalized < 0) {
+            normalized += 360;
+        }
+
+        return normalized;
+    }
+
     private PDImageXObject getOrCreatePdfImage(
             PDDocument document,
             Map<String, PDImageXObject> pdfImagesBySource,
@@ -273,51 +317,52 @@ public class GangSheetPdfService {
             ImageAsset imageAsset,
             GangSheetItemRequest item
     ) throws IOException {
-        if (imageAsset.format() == ImageAsset.ImageFormat.JPEG) {
-            try (InputStream jpegStream = Files.newInputStream(imageAsset.path())) {
-                return JPEGFactory.createFromStream(document, jpegStream);
-            }
-        }
-
-        RenderSize renderSize = calculateRenderSize(imageAsset, item);
-        BufferedImage image = assetStorageService.decodeForRender(
+        DecodeSize decodeSize = resolveDecodeSize(imageAsset, item);
+        BufferedImage decoded = assetStorageService.decodeForRender(
                 imageAsset,
-                renderSize.width(),
-                renderSize.height()
+                decodeSize.width(),
+                decodeSize.height()
         );
 
-        return LosslessFactory.createFromImage(document, image);
+        try {
+            BufferedImage normalized = toRgbOrArgb(decoded);
+            try {
+                return LosslessFactory.createFromImage(document, normalized);
+            } finally {
+                if (normalized != decoded) normalized.flush();
+            }
+        } finally {
+            decoded.flush();
+        }
     }
 
-    private String buildPdfImageCacheKey(ImageAsset imageAsset, GangSheetItemRequest item) {
-        String pathKey = imageAsset.path()
-                .toAbsolutePath()
-                .normalize()
-                .toString();
+    private BufferedImage toRgbOrArgb(BufferedImage src) {
+        int targetType = src.getColorModel().hasAlpha()
+                ? BufferedImage.TYPE_INT_ARGB
+                : BufferedImage.TYPE_INT_RGB;
 
-        if (imageAsset.format() == ImageAsset.ImageFormat.JPEG) {
-            return "JPEG|" + pathKey;
+        if (src.getType() == targetType) {
+            return src;
         }
 
-        RenderSize renderSize = calculateRenderSize(imageAsset, item);
-
-        return "OTHER|"
-                + pathKey
-                + "#"
-                + renderSize.width()
-                + "x"
-                + renderSize.height();
+        BufferedImage dst = new BufferedImage(src.getWidth(), src.getHeight(), targetType);
+        Graphics2D g = dst.createGraphics();
+        try {
+            g.drawImage(src, 0, 0, null);
+        } finally {
+            g.dispose();
+        }
+        return dst;
     }
 
-    private RenderSize calculateRenderSize(ImageAsset imageAsset, GangSheetItemRequest item) {
-        int targetWidth = Math.min(
-                imageAsset.width(),
-                Math.max(1, (int) Math.ceil(item.width() * imageRenderDpi))
-        );
-        int targetHeight = Math.min(
-                imageAsset.height(),
-                Math.max(1, (int) Math.ceil(item.height() * imageRenderDpi))
-        );
+    /**
+     * Chooses a bounded decode size for PDF rendering.
+     */
+    private DecodeSize resolveDecodeSize(ImageAsset imageAsset, GangSheetItemRequest item) {
+        int targetWidth = Math.clamp((int) Math.ceil(item.width() * imageRenderDpi), 1,
+                imageAsset.width());
+        int targetHeight = Math.clamp((int) Math.ceil(item.height() * imageRenderDpi), 1,
+                imageAsset.height());
 
         long targetPixels = (long) targetWidth * targetHeight;
 
@@ -327,130 +372,299 @@ public class GangSheetPdfService {
             targetHeight = Math.max(1, (int) Math.floor(targetHeight * scale));
         }
 
-        return new RenderSize(targetWidth, targetHeight);
+        return new DecodeSize(targetWidth, targetHeight);
     }
 
-    private List<ImageAsset> loadImages(List<GangSheetItemRequest> items) throws IOException {
-        LinkedHashMap<String, CompletableFuture<ImageAsset>> futuresBySource = new LinkedHashMap<>();
+    private record DecodeSize(int width, int height) {
+    }
 
+    private String buildPdfImageCacheKey(ImageAsset imageAsset, GangSheetItemRequest item) {
+        String pathKey = imageAsset.path()
+                .toAbsolutePath()
+                .normalize()
+                .toString();
+
+        DecodeSize renderSize = resolveDecodeSize(imageAsset, item);
+
+        return "%s|%s#%dx%d".formatted(
+                imageAsset.format().name(), pathKey,
+                renderSize.width(), renderSize.height()
+        );
+    }
+
+    private void addDpiWarningIfNeeded(
+            List<String> warnings,
+            ImageAsset imageAsset,
+            GangSheetItemRequest item,
+            int index
+    ) {
+        double actualDpiX = imageAsset.width() / item.width();
+        double actualDpiY = imageAsset.height() / item.height();
+
+        double actualDpi = Math.min(actualDpiX, actualDpiY);
+
+        if (actualDpi < warningDpi) {
+            warnings.add(
+                    "Item at index " + index
+                            + " has low DPI. actualDpi="
+                            + String.format("%.2f", actualDpi)
+                            + ", recommendedDpi>=" + warningDpi
+            );
+        }
+    }
+
+    private void enforceLoadedSizeBudget(List<ImageAsset> imageAssets) {
+        Set<String> seen = new HashSet<>();
+        long totalBytes = 0;
+
+        for (ImageAsset asset : imageAssets) {
+            if (asset == null || asset.source() == null || asset.source().isBlank()) {
+                continue;
+            }
+
+            if (!seen.add(asset.source())) {
+                continue;
+            }
+
+            long sizeBytes = asset.sizeBytes();
+
+            if (sizeBytes <= 0) {
+                continue;
+            }
+
+            totalBytes += sizeBytes;
+
+            if (totalBytes > maxTotalBytesPerRequest) {
+                log.warn("Loaded image size budget exceeded: totalBytes={} maxBytes={}",
+                        totalBytes, maxTotalBytesPerRequest);
+
+                throw new ImageSizeExceededException(
+                        "Total image size exceeds limit. totalBytes=%d, maxBytes=%d"
+                                .formatted(totalBytes, maxTotalBytesPerRequest)
+                );
+            }
+        }
+    }
+
+    private List<ImageAsset> loadImages(List<GangSheetItemRequest> items) {
+        Map<String, List<Integer>> indicesBySource = new LinkedHashMap<>();
+        for (int i = 0; i < items.size(); i++) {
+            indicesBySource.computeIfAbsent(items.get(i).img(), k -> new ArrayList<>()).add(i);
+        }
+
+        LinkedHashMap<String, CompletableFuture<ImageAsset>> futuresBySource = new LinkedHashMap<>();
+        List<ImageAsset> loadedUniqueAssets = null;
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (GangSheetItemRequest item : items) {
                 futuresBySource.computeIfAbsent(
                         item.img(),
                         source -> CompletableFuture.supplyAsync(
-                                () -> loadAssetWithTiming(source),
-                                executor
-                        )
-                );
+                                () -> loadAssetWithTiming(source), executor));
             }
 
             Map<String, ImageAsset> imagesBySource = new HashMap<>(futuresBySource.size());
-            List<ImageAsset> loadedUniqueAssets = new ArrayList<>();
-            Exception failure = null;
+            loadedUniqueAssets = new ArrayList<>();
+            List<ApiErrorDetail> imageErrors = new ArrayList<>();
 
             for (Map.Entry<String, CompletableFuture<ImageAsset>> entry : futuresBySource.entrySet()) {
+                String source = entry.getKey();
                 try {
-                    ImageAsset asset = joinImageFuture(entry.getValue(), entry.getKey());
-                    imagesBySource.put(entry.getKey(), asset);
+                    ImageAsset asset = joinImageFuture(entry.getValue(), source);
+                    imagesBySource.put(source, asset);
                     loadedUniqueAssets.add(asset);
-                } catch (IOException | RuntimeException ex) {
-                    if (failure == null) {
-                        failure = ex;
+                } catch (ImageLoadException ex) {
+                    log.warn("failed to load image src={}", source, ex);
+                    ApiResultCode errorCode = resolveImageErrorCode(ex);
+                    for (int idx : indicesBySource.getOrDefault(source, List.of(-1))) {
+                        imageErrors.add(ApiErrorDetail.imageError(
+                                idx,
+                                source,
+                                errorCode.getCode(),
+                                errorCode.getMessage()
+                        ));
                     }
                 }
             }
 
-            if (failure != null) {
+            if (!imageErrors.isEmpty()) {
                 assetStorageService.cleanupTempAssets(loadedUniqueAssets);
-
-                if (failure instanceof IOException ioException) {
-                    throw ioException;
-                }
-
-                throw (RuntimeException) failure;
+                log.warn("Image batch load failed: {}/{} source(s) could not be loaded",
+                        imageErrors.stream().map(ApiErrorDetail::source).distinct().count(),
+                        futuresBySource.size());
+                throw new ImageBatchLoadException(imageErrors);
             }
 
             List<ImageAsset> sourceImages = new ArrayList<>(items.size());
-
             for (GangSheetItemRequest item : items) {
-                ImageAsset imageAsset = imagesBySource.get(item.img());
-
-                if (imageAsset == null) {
-                    throw new IllegalStateException("Image was not loaded: " + item.img());
-                }
-
-                sourceImages.add(imageAsset);
+                sourceImages.add(imagesBySource.get(item.img()));
             }
-
             return sourceImages;
-        }
-    }
-    private ImageAsset loadAssetWithTiming(String source) {
-        try {
-            long t0 = System.nanoTime();
-            ImageAsset image = assetStorageService.loadAsset(source);
-            long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
-
-            int components = image.format() == ImageAsset.ImageFormat.JPEG
-                    ? assetStorageService.tryReadJpegComponents(image.path())
-                    : -1;
-
-            log.info(
-                    "loaded image: {}ms bytes={} {}x{} format={} components={} src={}",
-                    elapsedMs,
-                    image.sizeBytes(),
-                    image.width(),
-                    image.height(),
-                    image.format(),
-                    components,
-                    source
-            );
-            return image;
-        } catch (IOException ex) {
-            throw new UncheckedIOException(ex);
+        } catch (RuntimeException e) {
+            assetStorageService.cleanupTempAssets(loadedUniqueAssets);
+            throw e;
         }
     }
 
-    private ImageAsset joinImageFuture(CompletableFuture<ImageAsset> future, String source) throws IOException {
+    private ApiResultCode resolveImageErrorCode(Exception ex) {
+        if (ex instanceof ImageNotFoundException) return ApiResultCode.IMAGE_NOT_FOUND;
+        if (ex instanceof ImageSizeExceededException) return ApiResultCode.IMAGE_SIZE_EXCEEDED;
+        if (ex instanceof UnsupportedImageFormatException) return ApiResultCode.UNSUPPORTED_IMAGE_FORMAT;
+        if (ex instanceof TransientImageLoadException) return ApiResultCode.IMAGE_FETCH_ERROR;
+        return ApiResultCode.BAD_REQUEST;
+    }
+
+    private ImageAsset joinImageFuture(CompletableFuture<ImageAsset> future, String source) {
         try {
             return future.join();
         } catch (CompletionException ex) {
             Throwable cause = ex.getCause();
-            if (cause instanceof UncheckedIOException uio) {
-                throw uio.getCause();
-            }
-            if (cause instanceof RuntimeException re) {
-                throw re;
-            }
-            throw new IOException("Failed to load image: " + source, cause);
+            if (cause instanceof RuntimeException re) throw re;
+            throw new ImageLoadException("Failed to load image: " + source, cause);
+        }
+    }
+
+    private ImageAsset loadAssetWithTiming(String source) {
+        long t0 = System.nanoTime();
+        ImageAsset image = assetStorageService.loadAsset(source);
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+        log.debug("loaded image: {}ms bytes={} {}x{} format={} src={}",
+                elapsedMs, image.sizeBytes(), image.width(), image.height(),
+                image.format(), source);
+        return image;
+    }
+
+    private String buildOutputFileName(String id) {
+        return "gang-sheet-" + id + ".pdf";
+    }
+
+    private float inchToPoint(double inch) {
+        return (float) (inch * POINT_PER_INCH);
+    }
+
+    private void validateItemsInsideSheet(
+            List<GangSheetItemRequest> items,
+            double sheetWidth,
+            double sheetHeight
+    ) {
+        List<ApiErrorDetail> details = new ArrayList<>();
+
+        for (int i = 0; i < items.size(); i++) {
+            collectItemLayoutErrors(
+                    items.get(i),
+                    sheetWidth,
+                    sheetHeight,
+                    i,
+                    details
+            );
+        }
+
+        if (!details.isEmpty()) {
+            throw new GangSheetLayoutException(details);
+        }
+    }
+
+    private void collectItemLayoutErrors(
+            GangSheetItemRequest item,
+            double sheetWidth,
+            double sheetHeight,
+            int index,
+            List<ApiErrorDetail> details
+    ) {
+        if (item.width() <= 0 || item.height() <= 0) {
+            details.add(new ApiErrorDetail(
+                    "INVALID_ITEM_SIZE",
+                    "items[" + index + "]",
+                    "Item at index " + index + " has invalid size. "
+                            + "width=" + item.width()
+                            + ", height=" + item.height()
+            ));
+            return;
+        }
+
+        RotatedBounds bounds = calculateRotatedBounds(item);
+
+        if (bounds.left() < -EPSILON_INCH) {
+            details.add(new ApiErrorDetail(
+                    "ITEM_EXCEEDS_SHEET_LEFT",
+                    "items[" + index + "].x",
+                    "Item at index " + index
+                            + " exceeds sheet left boundary. left=" + bounds.left()
+            ));
+        }
+
+        if (bounds.top() < -EPSILON_INCH) {
+            details.add(new ApiErrorDetail(
+                    "ITEM_EXCEEDS_SHEET_TOP",
+                    "items[" + index + "].y",
+                    "Item at index " + index
+                            + " exceeds sheet top boundary. top=" + bounds.top()
+            ));
+        }
+
+        if (bounds.right() > sheetWidth + EPSILON_INCH) {
+            details.add(new ApiErrorDetail(
+                    "ITEM_EXCEEDS_SHEET_RIGHT",
+                    "items[" + index + "].x",
+                    "Item at index " + index
+                            + " exceeds sheet right boundary. right=" + bounds.right()
+                            + ", sheetWidth=" + sheetWidth
+            ));
+        }
+
+        if (bounds.bottom() > sheetHeight + EPSILON_INCH) {
+            details.add(new ApiErrorDetail(
+                    "ITEM_EXCEEDS_SHEET_BOTTOM",
+                    "items[" + index + "].y",
+                    "Item at index " + index
+                            + " exceeds sheet bottom boundary. bottom=" + bounds.bottom()
+                            + ", sheetHeight=" + sheetHeight
+            ));
         }
     }
 
     private double calculateSheetHeight(List<GangSheetItemRequest> items) {
-        double maxBottom = 0;
+        double maxBottom = 0.0;
 
         for (GangSheetItemRequest item : items) {
-            double bottom = item.y() + item.height();
-            maxBottom = Math.max(maxBottom, bottom);
+            RotatedBounds bounds = calculateRotatedBounds(item);
+            maxBottom = Math.max(maxBottom, bounds.bottom());
         }
 
         return maxBottom + bottomPaddingInch;
     }
 
-    private void validateRequest(List<GangSheetItemRequest> items) {
-        if (items == null || items.isEmpty()) {
-            throw new IllegalArgumentException("items must not be empty");
-        }
+    private RotatedBounds calculateRotatedBounds(GangSheetItemRequest item) {
+        double width = item.width();
+        double height = item.height();
 
-        if (items.size() > maxItemsPerRequest) {
-            throw new IllegalArgumentException(
-                    "Too many items in request. count=" + items.size()
-                            + ", max=" + maxItemsPerRequest
-            );
-        }
+        double centerX = item.x() + width / 2.0;
+        double centerY = item.y() + height / 2.0;
+
+        double rotationRadians = Math.toRadians(normalizeRotation(item.rotation()));
+
+        double sin = Math.abs(Math.sin(rotationRadians));
+        double cos = Math.abs(Math.cos(rotationRadians));
+
+        double rotatedWidth = width * cos + height * sin;
+        double rotatedHeight = width * sin + height * cos;
+
+        double left = centerX - rotatedWidth / 2.0;
+        double top = centerY - rotatedHeight / 2.0;
+        double right = centerX + rotatedWidth / 2.0;
+        double bottom = centerY + rotatedHeight / 2.0;
+
+        return new RotatedBounds(left, top, right, bottom);
     }
 
-    private void enforceLocalSizeBudget(List<GangSheetItemRequest> items) throws IOException {
+    private record RotatedBounds(
+            double left,
+            double top,
+            double right,
+            double bottom
+    ) {
+    }
+
+    private void enforceLocalSizeBudget(List<GangSheetItemRequest> items) {
         Set<String> seen = new HashSet<>();
         long totalLocalBytes = 0;
 
@@ -465,28 +679,11 @@ public class GangSheetPdfService {
         }
 
         if (totalLocalBytes > maxTotalBytesPerRequest) {
-            throw new IllegalArgumentException(
-                    "Total local image size exceeds limit. totalBytes=" + totalLocalBytes
-                            + ", maxBytes=" + maxTotalBytesPerRequest
-            );
-        }
-    }
-
-    private void enforceLoadedSizeBudget(List<ImageAsset> imageAssets) {
-        Set<String> seen = new HashSet<>();
-        long totalBytes = 0;
-
-        for (ImageAsset asset : imageAssets) {
-            if (!seen.add(asset.source())) {
-                continue;
-            }
-            totalBytes += asset.sizeBytes();
-        }
-
-        if (totalBytes > maxTotalBytesPerRequest) {
-            throw new IllegalArgumentException(
-                    "Total image size exceeds limit. totalBytes=" + totalBytes
-                            + ", maxBytes=" + maxTotalBytesPerRequest
+            log.warn("Local image size budget exceeded: totalBytes={} maxBytes={}",
+                    totalLocalBytes, maxTotalBytesPerRequest);
+            throw new ImageSizeExceededException(
+                    "Total image size exceeds limit. totalBytes=%d, maxBytes=%d"
+                            .formatted(totalLocalBytes, maxTotalBytesPerRequest)
             );
         }
     }
@@ -499,11 +696,9 @@ public class GangSheetPdfService {
 
     private void validateItemForSheetCalculation(GangSheetItemRequest item, int index) {
         if (item == null) {
-            throw new IllegalArgumentException("Item at index " + index + " must not be null");
-        }
-
-        if (item.img() == null || item.img().isBlank()) {
-            throw new IllegalArgumentException("img at index " + index + " must not be blank");
+            throw new IllegalArgumentException(
+                    "Item at index " + index + " must not be null"
+            );
         }
 
         if (!Double.isFinite(item.x())
@@ -513,18 +708,6 @@ public class GangSheetPdfService {
                 || !Double.isFinite(item.rotation())) {
             throw new IllegalArgumentException(
                     "Item at index " + index + " has non-finite geometry"
-            );
-        }
-
-        if (item.x() < 0 || item.y() < 0) {
-            throw new IllegalArgumentException(
-                    "Item at index " + index + " has negative x or y"
-            );
-        }
-
-        if (item.width() <= 0 || item.height() <= 0) {
-            throw new IllegalArgumentException(
-                    "Item at index " + index + " must have width/height > 0"
             );
         }
 
@@ -541,90 +724,30 @@ public class GangSheetPdfService {
         }
     }
 
-    private void validateItemsInsideSheet(
-            List<GangSheetItemRequest> items,
-            double sheetWidth,
-            double sheetHeight
-    ) {
-        for (int i = 0; i < items.size(); i++) {
-            validateItemInsideSheet(items.get(i), sheetWidth, sheetHeight, i);
+    private void validateRequest(List<GangSheetItemRequest> items) {
+        if (items == null || items.isEmpty()) {
+            throw new IllegalArgumentException("items must not be empty");
         }
-    }
 
-    private void validateItemInsideSheet(
-            GangSheetItemRequest item,
-            double sheetWidth,
-            double sheetHeight,
-            int index
-    ) {
-        if (item.x() + item.width() > sheetWidth) {
+        if (items.size() > maxItemsPerRequest) {
             throw new IllegalArgumentException(
-                    "Item at index " + index + " exceeds sheet width. "
-                            + "x + width = " + (item.x() + item.width())
-                            + ", sheetWidth = " + sheetWidth
+                    "Too many items in request. count=" + items.size() + ", max=" + maxItemsPerRequest
             );
-        }
 
-        if (item.y() + item.height() > sheetHeight) {
-            throw new IllegalArgumentException(
-                    "Item at index " + index + " exceeds sheet height. "
-                            + "y + height = " + (item.y() + item.height())
-                            + ", sheetHeight = " + sheetHeight
-            );
         }
     }
 
-    private void addDpiWarningIfNeeded(
-            List<String> warnings,
-            ImageAsset imageAsset,
-            GangSheetItemRequest item,
-            int index
-    ) {
-        double actualDpiX = imageAsset.width() / item.width();
-        double actualDpiY = imageAsset.height() / item.height();
-
-        double actualDpi = Math.min(actualDpiX, actualDpiY);
-
-        if (actualDpi < DEFAULT_WARNING_DPI) {
-            warnings.add(
-                    "Item at index " + index
-                            + " has low DPI. actualDpi="
-                            + String.format("%.2f", actualDpi)
-                            + ", recommendedDpi>=" + DEFAULT_WARNING_DPI
-            );
-        }
+    private static long ms(long nanos) {
+        return nanos / 1_000_000;
     }
 
-    private float inchToPoint(double inch) {
-        return (float) (inch * POINT_PER_INCH);
-    }
-
-    private double normalizeRotation(double rotationDegree) {
-        double normalized = rotationDegree % 360;
-
-        if (normalized < 0) {
-            normalized += 360;
+    private record SheetLayout(double widthInch, double heightInch) {
+        float widthPt() {
+            return (float) (widthInch * POINT_PER_INCH);
         }
 
-        return normalized;
-    }
-
-    private String buildOutputFileName(String id) {
-        return "gang-sheet-" + id + ".pdf";
-    }
-
-    private String buildDownloadUrl(String id) {
-        return "/api/gang-sheets/" + id + "/download";
-    }
-
-    private String normalizePdfId(String id) {
-        try {
-            return UUID.fromString(id).toString();
-        } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("Invalid PDF id: " + id);
+        float heightPt() {
+            return (float) (heightInch * POINT_PER_INCH);
         }
-    }
-
-    private record RenderSize(int width, int height) {
     }
 }

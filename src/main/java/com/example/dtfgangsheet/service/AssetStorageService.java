@@ -2,8 +2,11 @@ package com.example.dtfgangsheet.service;
 
 import com.example.dtfgangsheet.config.ImageProperties;
 import com.example.dtfgangsheet.dto.ImageAsset;
-import com.example.dtfgangsheet.dto.LoadedFile;
-import com.example.dtfgangsheet.exception.ImageLoadException;
+import com.example.dtfgangsheet.exception.*;
+import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
@@ -23,19 +26,12 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class AssetStorageService {
 
-    private static final int CONNECT_TIMEOUT_MS = 5_000;
-    private static final int READ_TIMEOUT_MS = 15_000;
-
-    /**
-     * Number of leading bytes probed when sniffing the JPEG SOF marker. Large enough
-     * to skip typical APPn/EXIF/ICC segments while staying far below full-image size.
-     */
-    private static final int JPEG_HEADER_PROBE_BYTES = 64 * 1024;
-    private static final String IMAGE_USER_AGENT = "DtfGangsheet/1.0 (+https://your-domain.example)";
+    private static final Logger log = LoggerFactory.getLogger(AssetStorageService.class);
 
     private final long maxImageBytes;
     private final int httpMaxAttempts;
@@ -43,6 +39,11 @@ public class AssetStorageService {
     private final long maxRetryDelayMs;
     private final long maxInputRasterPixels;
     private final String imageTempDir;
+    private final int connectTimeoutMs;
+    private final int readTimeoutMs;
+    private final String userAgent;
+    private final String ffmpegPath;
+    private final String ffprobePath;
 
     public AssetStorageService(ImageProperties imageProps) {
         this.maxImageBytes = imageProps.maxBytes();
@@ -51,6 +52,11 @@ public class AssetStorageService {
         this.maxRetryDelayMs = imageProps.maxRetryDelayMs();
         this.maxInputRasterPixels = imageProps.maxInputRasterPixels();
         this.imageTempDir = imageProps.tempDir();
+        this.connectTimeoutMs = imageProps.connectTimeoutMs();
+        this.readTimeoutMs = imageProps.readTimeoutMs();
+        this.userAgent = imageProps.userAgent();
+        this.ffmpegPath  = imageProps.ffmpegPath();
+        this.ffprobePath = imageProps.ffprobePath();
     }
 
     public ImageAsset loadAsset(String img) throws ImageLoadException {
@@ -62,8 +68,8 @@ public class AssetStorageService {
                     ? loadFileFromUrl(img)
                     : loadFileFromLocalPath(img);
 
-            ImageAsset.ImageFormat format = detectFormat(loadedFile.path());
-            ImageSize imageSize = readImageSize(loadedFile.path(), img);
+            ImageAsset.ImageFormat format = detectFormat(loadedFile.path(), img);
+            ImageSize imageSize = readImageSize(loadedFile.path(), img, format);
             validateInputRasterPixels(imageSize, img);
 
             return new ImageAsset(
@@ -80,15 +86,33 @@ public class AssetStorageService {
         }
     }
 
+    @PostConstruct
+    private void validateFfmpeg() {
+        checkBinary(ffmpegPath,  "ffmpeg");
+        checkBinary(ffprobePath, "ffprobe");
+    }
+
+    private void checkBinary(String path, String name) {
+        try {
+            new ProcessBuilder(path, "-version")
+                    .redirectErrorStream(true)
+                    .start()
+                    .waitFor(5, TimeUnit.SECONDS);
+            log.info("{} OK: path={}", name, path);
+        } catch (Exception e) {
+            log.error("{} not found: path={} — AVIF will fail at runtime", name, path);
+        }
+    }
+
     private LoadedFile loadFileFromLocalPath(String img) throws IOException {
         Path path = Path.of(img).toAbsolutePath().normalize();
 
         if (!Files.exists(path)) {
-            throw new ImageLoadException("Image file does not exist: " + img);
+            throw new ImageNotFoundException("Image file does not exist: " + img);
         }
 
         if (!Files.isRegularFile(path)) {
-            throw new ImageLoadException("Image path is not a file: " + img);
+            throw new ImageNotFoundException("Image path is not a file: " + img);
         }
 
         long sizeBytes = Files.size(path);
@@ -97,23 +121,28 @@ public class AssetStorageService {
         return new LoadedFile(path, sizeBytes, false);
     }
 
-    private void validateInputRasterPixels(ImageSize imageSize, String source) throws ImageLoadException {
+    private void validateInputRasterPixels(ImageSize imageSize, String source) {
+        if (imageSize == null) {
+            throw new ImageLoadException("Image size metadata is missing");
+        }
+        if (imageSize.width() <= 0 || imageSize.height() <= 0) {
+            throw new ImageLoadException(
+                    "Invalid image dimensions. width=" + imageSize.width()
+                            + ", height=" + imageSize.height()
+            );
+        }
+
         long pixels = (long) imageSize.width() * imageSize.height();
 
         if (pixels > maxInputRasterPixels) {
-            throw new ImageLoadException(
-                    "Image raster pixels exceed limit. pixels="
-                            + pixels
-                            + ", maxPixels="
-                            + maxInputRasterPixels
-                            + ", source="
-                            + source
-            );
+            throw new ImageSizeExceededException(
+                    "Image raster pixels exceed limit. pixels=" + pixels
+                            + ", maxPixels=" + maxInputRasterPixels + ", source=" + source);
         }
     }
 
     private LoadedFile loadFileFromUrl(String imageUrl) throws IOException {
-        IOException lastException = null;
+        Exception exception = null;
         int maxAttempts = Math.max(1, httpMaxAttempts);
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -122,9 +151,9 @@ public class AssetStorageService {
 
             try {
                 URLConnection connection = URI.create(imageUrl).toURL().openConnection();
-                connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-                connection.setReadTimeout(READ_TIMEOUT_MS);
-                connection.setRequestProperty("User-Agent", IMAGE_USER_AGENT);
+                connection.setConnectTimeout(connectTimeoutMs);
+                connection.setReadTimeout(readTimeoutMs);
+                connection.setRequestProperty("User-Agent", userAgent);
                 connection.setRequestProperty("Accept", "image/*");
 
                 if (connection instanceof HttpURLConnection detectedHttpConnection) {
@@ -132,50 +161,62 @@ public class AssetStorageService {
                     httpConnection.setInstanceFollowRedirects(true);
                     int statusCode = httpConnection.getResponseCode();
 
-                    if (statusCode < 200 || statusCode >= 300) {
-                        ImageLoadException exception = new ImageLoadException(
-                                "Cannot load image from URL. status="
-                                        + statusCode
-                                        + ", attempts="
-                                        + attempt
-                                        + ", url="
-                                        + imageUrl
-                        );
-
-                        if (shouldRetry(statusCode) && attempt < maxAttempts) {
-                            lastException = exception;
-                            sleepBeforeRetry(httpConnection, attempt);
-                            continue;
+                    if (HttpStatus.Series.resolve(statusCode) != HttpStatus.Series.SUCCESSFUL) {
+                        if (statusCode == HttpStatus.NOT_FOUND.value()) {
+                            throw new ImageNotFoundException("Image not found at URL: " + imageUrl);
                         }
-
-                        throw exception;
+                        if (shouldRetry(statusCode)) {
+                            if (attempt < maxAttempts) {
+                                exception = new ImageLoadException(
+                                        "Cannot load image from URL. status=" + statusCode
+                                                + ", attempts=" + attempt + ", url=" + imageUrl);
+                                sleepBeforeRetry(httpConnection, attempt);
+                                continue;
+                            }
+                            throw new TransientImageLoadException(
+                                    "Cannot load image from URL. status=" + statusCode
+                                            + ", attempts=" + attempt + ", url=" + imageUrl);
+                        }
+                        throw new ImageLoadException(
+                                "Cannot load image from URL. status=" + statusCode
+                                        + ", attempts=" + attempt + ", url=" + imageUrl);
+                    }
+                    String contentType = httpConnection.getContentType();
+                    if (contentType != null && !isSupportedImageContentType(contentType)) {
+                        throw new UnsupportedImageFormatException(
+                                "Unsupported image format. contentType=" + contentType + ", url=" + imageUrl);
                     }
                 }
 
                 validateImageSize(connection.getContentLengthLong(), imageUrl);
 
-                tempFile = createTempImageFile();
+                tempFile = createTempFile(".img");
                 long totalBytesRead;
 
                 try (InputStream inputStream = new BufferedInputStream(connection.getInputStream());
                      OutputStream outputStream = Files.newOutputStream(tempFile)) {
                     totalBytesRead = copyWithMaxSize(inputStream, outputStream, imageUrl);
                 }
-
                 return new LoadedFile(tempFile, totalBytesRead, true);
+
             } catch (ImageLoadException ex) {
                 deleteTempFileQuietly(tempFile);
                 throw ex;
+
+            } catch (IllegalArgumentException ex) {
+                deleteTempFileQuietly(tempFile);
+                throw new ImageLoadException("Invalid image URL: " + imageUrl, ex);
+
             } catch (IOException ex) {
                 deleteTempFileQuietly(tempFile);
-                lastException = ex;
+                exception = ex;
 
                 if (attempt < maxAttempts) {
                     sleepBeforeRetry(null, attempt);
                     continue;
                 }
 
-                throw new ImageLoadException("Cannot load image from URL: " + imageUrl, ex);
+                throw new TransientImageLoadException("Cannot load image from URL: " + imageUrl, ex);
             } finally {
                 if (httpConnection != null) {
                     httpConnection.disconnect();
@@ -183,7 +224,15 @@ public class AssetStorageService {
             }
         }
 
-        throw new ImageLoadException("Cannot load image from URL after retries: " + imageUrl, lastException);
+        throw new TransientImageLoadException("Cannot load image from URL after " + maxAttempts + " attempt(s): " + imageUrl, exception);
+    }
+
+    private boolean isSupportedImageContentType(String contentType) {
+        String lower = contentType.toLowerCase();
+        return lower.startsWith("image/png")
+                || lower.startsWith("image/webp")
+                || lower.startsWith("image/avif")   // thêm
+                || lower.startsWith("image/gif");
     }
 
     private void deleteTempFileQuietly(Path tempFile) {
@@ -194,18 +243,8 @@ public class AssetStorageService {
         try {
             Files.deleteIfExists(tempFile);
         } catch (IOException ignored) {
-            // Best-effort cleanup. Do not override the original exception.
+            log.warn("Failed to delete temp file, may accumulate on disk: path={}", tempFile);
         }
-    }
-
-    private Path createTempImageFile() throws IOException {
-        Path tempDir = Path.of(imageTempDir).toAbsolutePath().normalize();
-
-        if (!Files.exists(tempDir)) {
-            Files.createDirectories(tempDir);
-        }
-
-        return Files.createTempFile(tempDir, "gangsheet-image-", ".img");
     }
 
     private long copyWithMaxSize(InputStream inputStream, OutputStream outputStream, String source) throws IOException {
@@ -217,12 +256,8 @@ public class AssetStorageService {
             totalBytesRead += bytesRead;
 
             if (totalBytesRead > maxImageBytes) {
-                throw new ImageLoadException(
-                        "Image is too large. maxBytes="
-                                + maxImageBytes
-                                + ", source="
-                                + source
-                );
+                throw new ImageSizeExceededException(
+                        "Image is too large. maxBytes=" + maxImageBytes + ", source=" + source);
             }
 
             outputStream.write(buffer, 0, bytesRead);
@@ -236,40 +271,95 @@ public class AssetStorageService {
      * -1 for HTTP URLs or paths that are not regular files. Used for pre-flight
      * total-size budgeting without performing a download or read.
      */
-    public long peekLocalSize(String img) throws IOException {
-        if (img == null || img.isBlank() || isHttpUrl(img)) {
-            return -1L;
-        }
-
+    public long peekLocalSize(String img) {
+        if (img == null || img.isBlank() || isHttpUrl(img)) return -1L;
         Path path = Path.of(img).normalize();
-        if (!Files.isRegularFile(path)) {
+        if (!Files.isRegularFile(path)) return -1L;
+        try {
+            return Files.size(path);
+        } catch (IOException e) {
             return -1L;
         }
-
-        return Files.size(path);
     }
 
+    /**
+     * Decodes an image at a target render size to limit memory usage.
+     */
     public BufferedImage decodeForRender(
             ImageAsset imageAsset,
             int targetWidth,
             int targetHeight
     ) throws IOException {
-        BufferedImage decodedImage = readImage(
-                imageAsset.path(),
-                imageAsset.source(),
-                calculateSubsampling(
-                        imageAsset.width(),
-                        imageAsset.height(),
-                        targetWidth,
-                        targetHeight
-                )
-        );
-
+        if (imageAsset.format() == ImageAsset.ImageFormat.AVIF) {
+            return decodeAvifWithFfmpeg(imageAsset, targetWidth, targetHeight);
+        }
+        BufferedImage decodedImage = readImage(imageAsset.path(), imageAsset.source());
         return scaleDownIfNeeded(decodedImage, targetWidth, targetHeight);
     }
 
+    private BufferedImage decodeAvifWithFfmpeg(
+            ImageAsset imageAsset,
+            int targetWidth,
+            int targetHeight
+    ) throws IOException {
+        Path pngTemp = createTempFile(".png");
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    ffmpegPath,
+                    "-y",
+                    "-i", imageAsset.path().toString(),
+                    "-vframes", "1",
+                    "-vf", "scale=" + targetWidth + ":" + targetHeight,
+                    "-vcodec", "png",
+                    pngTemp.toString()
+            );
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+            String output;
+            try {
+                output = new String(process.getInputStream().readAllBytes()).trim();
+                boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+                if (!finished) {
+                    process.destroyForcibly();
+                    throw new ImageLoadException(
+                            "ffmpeg timed out decoding AVIF: " + imageAsset.source());
+                }
+                if (process.exitValue() != 0) {
+                    log.debug("ffmpeg output: {}", output);
+                    throw new ImageLoadException(
+                            "ffmpeg failed. exitCode=" + process.exitValue()
+                                    + ", output=" + output
+                                    + ", source=" + imageAsset.source());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new ImageLoadException(
+                        "Interrupted decoding AVIF: " + imageAsset.source(), e);
+            }
+
+            BufferedImage decoded = ImageIO.read(pngTemp.toFile());
+            if (decoded == null) {
+                throw new ImageLoadException(
+                        "Cannot read ffmpeg output: " + imageAsset.source());
+            }
+            return scaleDownIfNeeded(decoded, targetWidth, targetHeight);
+
+        } finally {
+            deleteTempFileQuietly(pngTemp);
+        }
+    }
+
+    private Path createTempFile(String suffix) throws IOException {
+        Path tempDir = Path.of(imageTempDir).toAbsolutePath().normalize();
+        if (!Files.exists(tempDir)) {
+            Files.createDirectories(tempDir);
+        }
+        return Files.createTempFile(tempDir, "gangsheet-image-", suffix);
+    }
+
     private boolean shouldRetry(int statusCode) {
-        return statusCode == 429
+        return statusCode == HttpStatus.TOO_MANY_REQUESTS.value()
                 || statusCode == HttpURLConnection.HTTP_BAD_GATEWAY
                 || statusCode == HttpURLConnection.HTTP_UNAVAILABLE
                 || statusCode == HttpURLConnection.HTTP_GATEWAY_TIMEOUT;
@@ -304,141 +394,184 @@ public class AssetStorageService {
         return Math.max(0, Math.min(exponentialDelayMs, maxRetryDelayMs));
     }
 
-    private void validateImageSize(long imageSizeBytes, String source) throws ImageLoadException {
+    private void validateImageSize(long imageSizeBytes, String source) {
         if (imageSizeBytes > maxImageBytes) {
-            throw new ImageLoadException(
-                    "Image is too large. sizeBytes="
-                            + imageSizeBytes
-                            + ", maxBytes="
-                            + maxImageBytes
-                            + ", source="
-                            + source
-            );
+            throw new ImageSizeExceededException(
+                    "Image is too large. sizeBytes=" + imageSizeBytes
+                            + ", maxBytes=" + maxImageBytes + ", source=" + source);
         }
     }
 
-    private ImageAsset.ImageFormat detectFormat(Path path) throws IOException {
-        byte[] header = new byte[3];
+    private ImageAsset.ImageFormat detectFormat(Path path, String source) throws IOException {
+        byte[] header = new byte[64];
 
         try (InputStream inputStream = Files.newInputStream(path)) {
-            int read = inputStream.read(header, 0, 3);
+            int read = inputStream.readNBytes(header, 0, header.length);
 
             if (read >= 3
                     && (header[0] & 0xFF) == 0xFF
                     && (header[1] & 0xFF) == 0xD8
                     && (header[2] & 0xFF) == 0xFF) {
-                return ImageAsset.ImageFormat.JPEG;
+                throw new UnsupportedImageFormatException(
+                        "JPEG images are not supported: " + source
+                );
+            }
+
+            if (read >= 8
+                    && (header[0] & 0xFF) == 0x89
+                    && header[1] == 0x50
+                    && header[2] == 0x4E
+                    && header[3] == 0x47
+                    && header[4] == 0x0D
+                    && header[5] == 0x0A
+                    && header[6] == 0x1A
+                    && header[7] == 0x0A) {
+                return ImageAsset.ImageFormat.PNG;
+            }
+
+            if (read >= 6
+                    && header[0] == 'G'
+                    && header[1] == 'I'
+                    && header[2] == 'F'
+                    && header[3] == '8') {
+                return ImageAsset.ImageFormat.GIF;
+            }
+
+            if (read >= 12
+                    && header[0] == 'R'
+                    && header[1] == 'I'
+                    && header[2] == 'F'
+                    && header[3] == 'F'
+                    && header[8] == 'W'
+                    && header[9] == 'E'
+                    && header[10] == 'B'
+                    && header[11] == 'P') {
+                return ImageAsset.ImageFormat.WEBP;
+            }
+            // AVIF: ftyp box tại offset 4, brand "avif" hoặc "avis" tại offset 8
+            if (isAvif(header, read)) {
+                return ImageAsset.ImageFormat.AVIF;
             }
         }
 
         return ImageAsset.ImageFormat.OTHER;
     }
 
-    private ImageSize readImageSize(Path path, String source) throws IOException {
+    private boolean isAvif(byte[] header, int read) {
+        int ftypOffset = -1;
+        for (int i = 0; i <= read - 4; i++) {
+            if (header[i]     == 'f' && header[i + 1] == 't'
+                    && header[i + 2] == 'y' && header[i + 3] == 'p') {
+                ftypOffset = i;
+                break;
+            }
+        }
+        if (ftypOffset < 0) return false;
+
+        for (int i = ftypOffset; i <= read - 4; i += 4) {
+            if (header[i]     == 'a' && header[i + 1] == 'v'
+                    && header[i + 2] == 'i'
+                    && (header[i + 3] == 'f' || header[i + 3] == 's')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String bytesToHex(byte[] bytes, int len) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < len; i++) {
+            sb.append(String.format("%02X ", bytes[i]));
+        }
+        return sb.toString().trim();
+    }
+
+    private ImageSize readImageSize(Path path, String source, ImageAsset.ImageFormat format) throws IOException {
+        // AVIF dùng libvips
+        if (format == ImageAsset.ImageFormat.AVIF) {
+            return readAvifImageSize(path, source);
+        }
+
+        // PNG/WEBP/GIF dùng ImageIO
         try (ImageInputStream imageInputStream = ImageIO.createImageInputStream(path.toFile())) {
             if (imageInputStream == null) {
-                throw new ImageLoadException("Cannot create image input stream: " + source);
+                throw new ImageLoadException("Cannot read image format: " + source);
             }
-
             Iterator<ImageReader> readers = ImageIO.getImageReaders(imageInputStream);
-
             if (!readers.hasNext()) {
-                throw new ImageLoadException("Unsupported image format: " + source);
+                throw new UnsupportedImageFormatException("Unsupported image format: " + source);
             }
-
             ImageReader reader = readers.next();
-
             try {
+                imageInputStream.seek(0);
                 reader.setInput(imageInputStream, true, true);
-
                 int width = reader.getWidth(0);
                 int height = reader.getHeight(0);
-
                 if (width <= 0 || height <= 0) {
-                    throw new ImageLoadException("Invalid image size: " + source);
+                    throw new ImageLoadException("Invalid image dimensions: " + source);
                 }
-
                 return new ImageSize(width, height);
+            } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
+                throw new ImageLoadException("Cannot read image dimensions: " + source, e);
             } finally {
                 reader.dispose();
             }
         }
     }
 
-    /**
-     * Reads the JPEG SOF marker's Nf (number of components) field from the start of
-     * the file. Only the header is read (the SOF marker appears before the scan data),
-     * so we avoid loading the whole image into memory. Best-effort: returns -1 on any
-     * read failure or when the SOF marker is not found within the probed prefix.
-     */
-    public int tryReadJpegComponents(Path path) throws IOException {
-        byte[] header = new byte[JPEG_HEADER_PROBE_BYTES];
-        int read;
+    private ImageSize readAvifImageSize(Path path, String source) throws IOException {
+        ProcessBuilder pb = new ProcessBuilder(
+                ffprobePath,
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0",
+                path.toString()
+        );
+        pb.redirectErrorStream(true);
 
-        try (InputStream inputStream = Files.newInputStream(path)) {
-            read = inputStream.readNBytes(header, 0, header.length);
+        Process process = pb.start();
+        String output;
+        try {
+            output = new String(process.getInputStream().readAllBytes()).trim();
+            boolean finished = process.waitFor(10, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new ImageLoadException("ffprobe timed out: " + source);
+            }
+            if (process.exitValue() != 0) {
+                throw new ImageLoadException(
+                        "ffprobe failed. exitCode=" + process.exitValue()
+                                + ", output=" + output + ", source=" + source);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ImageLoadException("Interrupted reading AVIF size: " + source, e);
         }
 
-        if (read < header.length) {
-            header = java.util.Arrays.copyOf(header, read);
+        String[] parts = output.split(",");
+        if (parts.length < 2) {
+            throw new ImageLoadException(
+                    "Cannot parse AVIF dimensions. output='"
+                            + output + "', source=" + source);
         }
-
-        return tryReadJpegComponents(header);
+        try {
+            int width  = Integer.parseInt(parts[0].trim());
+            int height = Integer.parseInt(parts[1].trim());
+            if (width <= 0 || height <= 0) {
+                throw new ImageLoadException(
+                        "Invalid AVIF dimensions. width=" + width
+                                + ", height=" + height + ", source=" + source);
+            }
+            return new ImageSize(width, height);
+        } catch (NumberFormatException e) {
+            throw new ImageLoadException(
+                    "Cannot parse AVIF dimensions. output='"
+                            + output + "', source=" + source, e);
+        }
     }
 
-    /**
-     * Reads the JPEG SOF marker's Nf (number of components) field directly from bytes.
-     * Returns 1=Gray, 3=RGB/YCbCr, 4=CMYK/YCCK, -1 if not JPEG or malformed.
-     */
-    private int tryReadJpegComponents(byte[] bytes) {
-        if (bytes == null
-                || bytes.length < 4
-                || (bytes[0] & 0xFF) != 0xFF
-                || (bytes[1] & 0xFF) != 0xD8) {
-            return -1;
-        }
-
-        int i = 2;
-        while (i + 4 <= bytes.length) {
-            while (i < bytes.length && (bytes[i] & 0xFF) == 0xFF) {
-                i++;
-            }
-            if (i >= bytes.length) {
-                return -1;
-            }
-
-            int marker = bytes[i] & 0xFF;
-            i++;
-
-            if (marker == 0x00 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD9)) {
-                continue;
-            }
-
-            if (i + 2 > bytes.length) {
-                return -1;
-            }
-
-            int segmentLength = ((bytes[i] & 0xFF) << 8) | (bytes[i + 1] & 0xFF);
-            if (segmentLength < 2) {
-                return -1;
-            }
-
-            boolean isStartOfFrame = marker >= 0xC0 && marker <= 0xCF
-                    && marker != 0xC4 && marker != 0xC8 && marker != 0xCC;
-
-            if (isStartOfFrame) {
-                if (i + 8 > bytes.length) {
-                    return -1;
-                }
-                return bytes[i + 7] & 0xFF;
-            }
-
-            i += segmentLength;
-        }
-        return -1;
-    }
-
-    private BufferedImage readImage(Path path, String source, int subsampling) throws IOException {
+    private BufferedImage readImage(Path path, String source) throws IOException {
         try (ImageInputStream imageInputStream = createImageInputStream(path, source)) {
             ImageReader imageReader = getImageReader(imageInputStream, source);
 
@@ -448,17 +581,17 @@ public class AssetStorageService {
 
                 ImageReadParam readParam = imageReader.getDefaultReadParam();
 
-                if (subsampling > 1) {
-                    readParam.setSourceSubsampling(subsampling, subsampling, 0, 0);
+                BufferedImage image;
+                try {
+                    image = imageReader.read(0, readParam);
+                    if (image == null) {
+                        throw new ImageLoadException("Cannot decode image: " + source);
+                    }
+                    return image;
+
+                } catch (IOException | RuntimeException e) {
+                    throw new ImageLoadException("Cannot decode image: " + source, e);
                 }
-
-                BufferedImage image = imageReader.read(0, readParam);
-
-                if (image == null) {
-                    throw new ImageLoadException("Cannot decode image: " + source);
-                }
-
-                return image;
             } finally {
                 imageReader.dispose();
             }
@@ -475,32 +608,14 @@ public class AssetStorageService {
         return imageInputStream;
     }
 
-    private ImageReader getImageReader(ImageInputStream imageInputStream, String source) throws IOException {
+    private ImageReader getImageReader(ImageInputStream imageInputStream, String source) {
         Iterator<ImageReader> imageReaders = ImageIO.getImageReaders(imageInputStream);
 
         if (!imageReaders.hasNext()) {
-            throw new ImageLoadException("Unsupported image format: " + source);
+            throw new UnsupportedImageFormatException("Unsupported image format: " + source);
         }
 
         return imageReaders.next();
-    }
-
-    private int calculateSubsampling(
-            int sourceWidth,
-            int sourceHeight,
-            int targetWidth,
-            int targetHeight
-    ) {
-        int safeTargetWidth = Math.max(1, targetWidth);
-        int safeTargetHeight = Math.max(1, targetHeight);
-
-        return Math.max(
-                1,
-                Math.min(
-                        sourceWidth / safeTargetWidth,
-                        sourceHeight / safeTargetHeight
-                )
-        );
     }
 
     private BufferedImage scaleDownIfNeeded(
@@ -556,7 +671,9 @@ public class AssetStorageService {
         return lower.startsWith("http://") || lower.startsWith("https://");
     }
 
-    private record ImageSize(int width, int height) { }
+    private record ImageSize(int width, int height) {
+    }
+
     public void cleanupTempAssets(List<ImageAsset> imageAssets) {
         if (imageAssets == null || imageAssets.isEmpty()) {
             return;
@@ -569,9 +686,16 @@ public class AssetStorageService {
                 try {
                     Files.deleteIfExists(imageAsset.path());
                 } catch (IOException ignored) {
-                    // Best-effort cleanup.
+                    log.warn("Failed to cleanup temp asset, may accumulate on disk: path={}", imageAsset.path());
                 }
             }
         }
+    }
+
+    private record LoadedFile(
+            Path path,
+            long sizeBytes,
+            boolean temporary
+    ) {
     }
 }

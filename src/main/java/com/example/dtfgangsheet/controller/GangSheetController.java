@@ -1,10 +1,12 @@
 package com.example.dtfgangsheet.controller;
 
 import com.example.dtfgangsheet.dto.ApiResponse;
+import com.example.dtfgangsheet.dto.ApiResultCode;
 import com.example.dtfgangsheet.dto.GangSheetItemRequest;
 import com.example.dtfgangsheet.dto.GeneratePdfResponse;
 import com.example.dtfgangsheet.service.GangSheetPdfService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.core.io.PathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -29,36 +31,17 @@ public class GangSheetController {
     }
 
     @PostMapping("/pdf")
-    public ResponseEntity<ApiResponse<GeneratePdfResponse>> generatePdf(
-            @Valid @RequestBody List<@Valid GangSheetItemRequest> items
+    @ResponseStatus(HttpStatus.CREATED)
+    public ApiResponse<GeneratePdfResponse> generatePdf(
+            @Valid @RequestBody List<@NotNull @Valid GangSheetItemRequest> items
     ) throws IOException {
 
         GeneratePdfResponse response = gangSheetPdfService.generate(items);
 
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(ApiResponse.success(
-                        "PDF_CREATED",
-                        "PDF created successfully",
-                        response
-                ));
-    }
-
-    @GetMapping("/{id}/download")
-    public ResponseEntity<Resource> downloadPdf(@PathVariable String id) throws IOException {
-        Path pdfPath = gangSheetPdfService.resolveGeneratedPdf(id);
-        Resource resource = new PathResource(pdfPath);
-
-        return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_PDF)
-                .contentLength(resource.contentLength())
-                .header(
-                        HttpHeaders.CONTENT_DISPOSITION,
-                        ContentDisposition.attachment()
-                                .filename(pdfPath.getFileName().toString())
-                                .build()
-                                .toString()
-                )
-                .body(resource);
+        return ApiResponse.success(
+                ApiResultCode.PDF_CREATED.getCode(),
+                ApiResultCode.PDF_CREATED.getMessage(),
+                response
+        );
     }
 }
