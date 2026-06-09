@@ -2,10 +2,9 @@ package com.example.dtfgangsheet.service;
 
 import com.example.dtfgangsheet.config.ImageProperties;
 import com.example.dtfgangsheet.config.PdfProperties;
-import com.example.dtfgangsheet.model.GangSheetItem;
-import com.example.dtfgangsheet.dto.request.NestingRequest;
 import com.example.dtfgangsheet.dto.response.NestingResponse;
 import com.example.dtfgangsheet.dto.response.PdfSheetResponse;
+import com.example.dtfgangsheet.model.GangSheetItem;
 import com.example.dtfgangsheet.model.ImageAsset;
 import com.example.dtfgangsheet.model.NestingInput;
 import org.slf4j.Logger;
@@ -26,18 +25,22 @@ public class MaxRectsNestingService {
     private final double usableWidthInch;
     private final double bottomPaddingInch;
     private final double itemGapInch;
-    private final int    renderDpi;
+    private final double qrCodeSizeInch;      // thêm
+    private final double qrCodeMarginInch;
+    private final int renderDpi;
 
     public MaxRectsNestingService(PdfProperties pdfProps, ImageProperties imageProps) {
-        this.sheetWidthInch    = pdfProps.sheetWidthInch();
-        this.usableWidthInch   = pdfProps.sheetWidthInch() - pdfProps.rightPaddingInch();
+        this.sheetWidthInch = pdfProps.sheetWidthInch();
+        this.usableWidthInch = pdfProps.sheetWidthInch() - pdfProps.rightPaddingInch();
         this.bottomPaddingInch = pdfProps.bottomPaddingInch();
-        this.itemGapInch       = pdfProps.itemGapInch();
-        this.renderDpi         = imageProps.renderDpi();
+        this.itemGapInch = pdfProps.itemGapInch();
+        this.qrCodeSizeInch    = pdfProps.qrCodeSizeInch();
+        this.qrCodeMarginInch  = pdfProps.qrCodeMarginInch();
+        this.renderDpi = imageProps.renderDpi();
     }
 
     public NestingResponse nest(List<NestingInput> requests, List<ImageAsset> assets) {
-        List<Slot> slots = buildSlots(requests, assets);
+        List<Slot> slots = buildSlots(requests);
 
         log.debug("Nesting: {} slots from {} requests, usableWidth={}in sheetWidth={}in gap={}in",
                 slots.size(), requests.size(), usableWidthInch, sheetWidthInch, itemGapInch);
@@ -47,7 +50,7 @@ public class MaxRectsNestingService {
         List<FreeRect> freeRects = new ArrayList<>();
         freeRects.add(new FreeRect(0, 0, usableWidthInch, STRIP_INIT_HEIGHT));
 
-        List<Placed> placed  = new ArrayList<>();
+        List<Placed> placed = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
 
         for (Slot slot : slots) {
@@ -60,7 +63,7 @@ public class MaxRectsNestingService {
                 continue;
             }
 
-            double gap      = slot.gap();
+            double gap = slot.gap();
             double imgOrigW = slot.slotW() - gap * 2;
             double imgOrigH = slot.slotH() - gap * 2;
 
@@ -84,13 +87,11 @@ public class MaxRectsNestingService {
     // Build slots
     // -------------------------------------------------------------------------
 
-    private List<Slot> buildSlots(List<NestingInput> requests, List<ImageAsset> assets) {
+    private List<Slot> buildSlots(List<NestingInput> requests) {
         List<Slot> slots = new ArrayList<>();
 
         for (int i = 0; i < requests.size(); i++) {
-            NestingInput req   = requests.get(i);
-            ImageAsset     asset = assets.get(i);
-
+            NestingInput req = requests.get(i);
             double w = req.width();
             double h = req.height();
 
@@ -122,8 +123,8 @@ public class MaxRectsNestingService {
     // -------------------------------------------------------------------------
 
     private Placement findBestPlacement(List<FreeRect> freeRects, double w, double h) {
-        Placement best      = null;
-        double    bestScore = Double.MAX_VALUE;
+        Placement best = null;
+        double bestScore = Double.MAX_VALUE;
 
         for (FreeRect fr : freeRects) {
             if (fr.w() >= w && fr.h() >= h) {
@@ -155,7 +156,7 @@ public class MaxRectsNestingService {
 
     private void splitAndPrune(List<FreeRect> freeRects,
                                double px, double py, double pw, double ph) {
-        List<FreeRect> toAdd    = new ArrayList<>();
+        List<FreeRect> toAdd = new ArrayList<>();
         List<FreeRect> toRemove = new ArrayList<>();
 
         for (FreeRect fr : freeRects) {
@@ -184,23 +185,31 @@ public class MaxRectsNestingService {
     }
 
     private void pruneDominated(List<FreeRect> rects) {
-        List<FreeRect> dominated = new ArrayList<>();
         int n = rects.size();
+        boolean[] dominated = new boolean[n];
+
         for (int i = 0; i < n; i++) {
+            if (dominated[i]) continue;
             FreeRect a = rects.get(i);
-            if (dominated.contains(a)) continue;
             for (int j = 0; j < n; j++) {
-                if (i == j) continue;
+                if (i == j || dominated[j]) continue;
                 FreeRect b = rects.get(j);
                 if (b.x() <= a.x() && b.y() <= a.y()
                         && b.x() + b.w() >= a.x() + a.w()
                         && b.y() + b.h() >= a.y() + a.h()) {
-                    dominated.add(a);
+                    dominated[i] = true;
                     break;
                 }
             }
         }
-        rects.removeAll(dominated);
+
+        int write = 0;
+        for (int i = 0; i < n; i++) {
+            if (!dominated[i]) {
+                rects.set(write++, rects.get(i));
+            }
+        }
+        rects.subList(write, n).clear();
     }
 
     // -------------------------------------------------------------------------
@@ -219,13 +228,44 @@ public class MaxRectsNestingService {
         double maxBottom = placed.stream()
                 .mapToDouble(p -> p.y() + p.h())
                 .max().orElse(0);
-        double sheetHeight = maxBottom + bottomPaddingInch;
+
+        double maxRight = placed.stream()
+                .mapToDouble(p -> p.x() + p.w())
+                .max().orElse(0);
+
+        double actualRightGap = sheetWidthInch - maxRight;
+        double minQrSpace     = qrCodeSizeInch + qrCodeMarginInch * 2;
+
+        double effectiveBottomPadding;
+        if (actualRightGap >= minQrSpace) {
+            // Bên phải đủ chỗ → QR vào right margin
+            // Nhưng sheet phải đủ cao để QR không bị cắt (QR đặt góc trên-phải)
+            double minHeightForQr = qrCodeSizeInch + qrCodeMarginInch;
+            double currentHeight  = maxBottom + bottomPaddingInch;
+            if (currentHeight < minHeightForQr) {
+                effectiveBottomPadding = minHeightForQr - maxBottom;
+            } else {
+                effectiveBottomPadding = bottomPaddingInch;
+            }
+            log.debug("QR → right margin: actualRightGap={}in >= minQrSpace={}in",
+                    String.format("%.2f", actualRightGap),
+                    String.format("%.2f", minQrSpace));
+        } else {
+            // Bên phải không đủ → QR xuống bottom
+            effectiveBottomPadding = Math.max(bottomPaddingInch, minQrSpace);
+            log.debug("QR → bottom margin: actualRightGap={}in < minQrSpace={}in → bottomPadding={}in",
+                    String.format("%.2f", actualRightGap),
+                    String.format("%.2f", minQrSpace),
+                    String.format("%.2f", effectiveBottomPadding));
+        }
+
+        double sheetHeight = maxBottom + effectiveBottomPadding;
 
         long   rotatedCount = placed.stream().filter(Placed::rotated).count();
         double usedArea     = placed.stream().mapToDouble(p -> p.w() * p.h()).sum();
         double usagePct     = (usedArea / (usableWidthInch * sheetHeight)) * 100.0;
 
-        log.info("Nesting done: placed={}/{} height={}in usage={}% rotated={}",
+        log.debug("Nesting done: placed={}/{} height={}in usage={}% rotated={}",
                 placed.size(), totalRequested,
                 String.format("%.3f", sheetHeight),
                 String.format("%.1f", usagePct),
@@ -258,13 +298,18 @@ public class MaxRectsNestingService {
     // Internal records
     // -------------------------------------------------------------------------
 
-    private record FreeRect(double x, double y, double w, double h) {}
-
-    private record Slot(String source, double slotW, double slotH, double gap) {
-        double area() { return slotW * slotH; }
+    private record FreeRect(double x, double y, double w, double h) {
     }
 
-    private record Placement(double x, double y, boolean rotated) {}
+    private record Slot(String source, double slotW, double slotH, double gap) {
+        double area() {
+            return slotW * slotH;
+        }
+    }
 
-    private record Placed(String source, double x, double y, double w, double h, boolean rotated) {}
+    private record Placement(double x, double y, boolean rotated) {
+    }
+
+    private record Placed(String source, double x, double y, double w, double h, boolean rotated) {
+    }
 }

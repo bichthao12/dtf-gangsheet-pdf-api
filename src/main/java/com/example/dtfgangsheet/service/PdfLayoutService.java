@@ -74,8 +74,17 @@ public class PdfLayoutService {
      */
     public SheetLayout computeLayout(List<GangSheetItem> items) {
         double printableWidth = printableWidthInch();
-        double sheetHeight    = calculateSheetHeight(items);
-        validateItemsInsideSheet(items, printableWidth, sheetHeight);
+
+        // Tính bounds 1 lần cho tất cả items
+        List<RotatedBounds> allBounds = items.stream()
+                .map(this::rotatedBounds)
+                .toList();
+
+        double sheetHeight = allBounds.stream()
+                .mapToDouble(RotatedBounds::bottom)
+                .max().orElse(0) + bottomPaddingInch;
+
+        validateItemsInsideSheet(items, allBounds, printableWidth, sheetHeight);
         return new SheetLayout(sheetWidthInch, sheetHeight);
     }
 
@@ -105,17 +114,17 @@ public class PdfLayoutService {
     }
 
     private void validateItemsInsideSheet(List<GangSheetItem> items,
+                                          List<RotatedBounds> allBounds,
                                           double sheetWidth, double sheetHeight) {
         List<ApiErrorDetail> details = new ArrayList<>();
         for (int i = 0; i < items.size(); i++) {
-            collectLayoutErrors(items.get(i), sheetWidth, sheetHeight, i, details);
+            collectLayoutErrors(items.get(i), allBounds.get(i), sheetWidth, sheetHeight, i, details);
         }
-        if (!details.isEmpty()) {
-            throw new GangSheetLayoutException(details);
-        }
+        if (!details.isEmpty()) throw new GangSheetLayoutException(details);
     }
 
     private void collectLayoutErrors(GangSheetItem item,
+                                     RotatedBounds bounds,
                                      double sheetWidth, double sheetHeight,
                                      int index, List<ApiErrorDetail> details) {
         if (item.width() <= 0 || item.height() <= 0) {
@@ -124,8 +133,6 @@ public class PdfLayoutService {
                             + ", height=" + item.height()));
             return;
         }
-
-        RotatedBounds bounds = rotatedBounds(item);
 
         if (bounds.left() < -EPSILON_INCH)
             details.add(ApiErrorDetail.of("ITEM_EXCEEDS_SHEET_LEFT", "items[" + index + "].x",
@@ -144,17 +151,6 @@ public class PdfLayoutService {
             details.add(ApiErrorDetail.of("ITEM_EXCEEDS_SHEET_BOTTOM", "items[" + index + "].y",
                     "Item at index " + index + " exceeds sheet bottom boundary. bottom=" + bounds.bottom()
                             + ", sheetHeight=" + sheetHeight));
-    }
-
-    // =========================================================================
-    // Geometry
-    // =========================================================================
-
-    private double calculateSheetHeight(List<GangSheetItem> items) {
-        double maxBottom = items.stream()
-                .mapToDouble(item -> rotatedBounds(item).bottom())
-                .max().orElse(0);
-        return maxBottom + bottomPaddingInch;
     }
 
     public RotatedBounds rotatedBounds(GangSheetItem item) {

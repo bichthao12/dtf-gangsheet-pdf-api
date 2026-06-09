@@ -13,6 +13,20 @@ public record PdfProperties(
         @Positive double sheetWidthInch,
         @PositiveOrZero double rightPaddingInch,
         @PositiveOrZero double bottomPaddingInch,
-        @PositiveOrZero double itemGapInch
-
-) { }
+        @PositiveOrZero double itemGapInch,
+        @Positive double qrCodeSizeInch,
+        @PositiveOrZero double qrCodeMarginInch
+) {
+    /**
+     * bottomPadding thực tế dùng để render.
+     * Nếu rightPadding đủ chứa QR → giữ nguyên bottomPadding.
+     * Nếu không đủ → tự động tăng bottomPadding để chừa chỗ cho QR.
+     */
+    public double effectiveBottomPaddingInch() {
+        double minQrSpace = qrCodeSizeInch + qrCodeMarginInch * 2;
+        if (rightPaddingInch >= minQrSpace) {
+            return bottomPaddingInch;
+        }
+        return Math.max(bottomPaddingInch, minQrSpace);
+    }
+}

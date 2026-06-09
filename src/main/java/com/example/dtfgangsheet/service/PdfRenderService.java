@@ -9,6 +9,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.graphics.image.JPEGFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.util.Matrix;
@@ -130,28 +131,51 @@ public class PdfRenderService {
                                                Map<String, PDImageXObject> cache,
                                                ImageAsset asset,
                                                GangSheetItem item) throws IOException {
-        String key = cacheKey(asset, item);
+        DecodeSize decodeSize = resolveDecodeSize(asset, item);   // tính 1 lần
+        String key = cacheKey(asset, decodeSize);                 // dùng decodeSize đã có
         PDImageXObject cached = cache.get(key);
         if (cached != null) return cached;
 
-        PDImageXObject pdfImage = createPdfImage(doc, asset, item);
+        PDImageXObject pdfImage = createPdfImage(doc, asset, item, decodeSize);  // truyền xuống
         cache.put(key, pdfImage);
         return pdfImage;
     }
 
-    private PDImageXObject createPdfImage(PDDocument doc,
-                                          ImageAsset asset,
-                                          GangSheetItem item) throws IOException {
-        DecodeSize decodeSize = resolveDecodeSize(asset, item);
+    private PDImageXObject createPdfImage(PDDocument doc, ImageAsset asset,
+                                          GangSheetItem item, DecodeSize decodeSize) throws IOException {
+        log.debug("decodeSize: {}x{}px from {}x{}px src={}",
+                decodeSize.width(), decodeSize.height(),
+                asset.width(), asset.height(), asset.source());
+
+        long tDecode = System.nanoTime();
         BufferedImage decoded = assetStorageService.decodeForRender(
                 asset, decodeSize.width(), decodeSize.height());
+        log.debug("decode: {}ms {}x{}px",
+                ms(System.nanoTime() - tDecode),
+                decoded.getWidth(), decoded.getHeight());
+
         try {
-            BufferedImage normalized = toRgbOrArgb(decoded);
-            try {
-                return LosslessFactory.createFromImage(doc, normalized);
-            } finally {
-                if (normalized != decoded) normalized.flush();
+            long tFactory = System.nanoTime();
+            PDImageXObject result;
+
+            if (decoded.getColorModel().hasAlpha()) {
+                // Có alpha (transparent PNG) → bắt buộc dùng LosslessFactory để giữ transparency
+                BufferedImage normalized = toRgbOrArgb(decoded);
+                try {
+                    result = LosslessFactory.createFromImage(doc, normalized);
+                } finally {
+                    if (normalized != decoded) normalized.flush();
+                }
+            } else {
+                // Không có alpha → JPEGFactory nhanh hơn ~10x
+                // quality 0.95 = không phân biệt được bằng mắt ở 300 DPI
+                result = JPEGFactory.createFromImage(doc, decoded, 0.95f);
             }
+
+            log.debug("factory: {}ms hasAlpha={}",
+                    ms(System.nanoTime() - tFactory),
+                    decoded.getColorModel().hasAlpha());
+            return result;
         } finally {
             decoded.flush();
         }
@@ -196,13 +220,13 @@ public class PdfRenderService {
         return new DecodeSize(tw, th);
     }
 
-    private String cacheKey(ImageAsset asset, GangSheetItem item) {
-        DecodeSize ds = resolveDecodeSize(asset, item);
+    private String cacheKey(ImageAsset asset, DecodeSize decodeSize) {
         return "%s|%s#%dx%d".formatted(
                 asset.format().name(),
                 asset.path().toAbsolutePath().normalize(),
-                ds.width(), ds.height());
+                decodeSize.width(), decodeSize.height());
     }
+
 
     private BufferedImage toRgbOrArgb(BufferedImage src) {
         int type = src.getColorModel().hasAlpha()

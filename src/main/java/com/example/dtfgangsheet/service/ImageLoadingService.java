@@ -61,7 +61,7 @@ public class ImageLoadingService {
         LoadResult result = collectResults(futures, indices);
 
         if (!result.errors().isEmpty()) {
-            assetStorageService.cleanupTempAssets(result.loaded());
+            assetStorageService.cleanup(result.loaded());
             throw new ImageBatchLoadException(result.errors());
         }
 
@@ -72,13 +72,30 @@ public class ImageLoadingService {
     }
 
     /**
+     * Overload tiện lợi — tự build indices từ sources.
+     * Dùng khi caller không cần indices cho mục đích khác.
+     */
+    public List<ImageAsset> loadOrdered(List<String> sources) {
+        Map<String, List<Integer>> indices = buildIndices(sources);
+        return loadOrdered(sources, indices);
+    }
+
+    private static Map<String, List<Integer>> buildIndices(List<String> sources) {
+        Map<String, List<Integer>> map = new LinkedHashMap<>();
+        for (int i = 0; i < sources.size(); i++) {
+            map.computeIfAbsent(sources.get(i), k -> new ArrayList<>()).add(i);
+        }
+        return map;
+    }
+
+    /**
      * Cleanup temp assets đã load — dùng khi caller muốn cleanup thủ công.
      * Guard bằng Set<Path> trong AssetStorageService nên an toàn khi có duplicate.
      */
     public void cleanup(List<ImageAsset> assets) {
         if (assets == null || assets.isEmpty()) return;
         try {
-            assetStorageService.cleanupTempAssets(assets.stream().distinct().toList());
+            assetStorageService.cleanup(assets.stream().distinct().toList());
         } catch (Exception e) {
             log.warn("Failed to cleanup temp assets", e);
         }
@@ -150,7 +167,7 @@ public class ImageLoadingService {
 
     private ImageAsset loadWithTiming(String source) {
         long t0    = System.nanoTime();
-        ImageAsset asset = assetStorageService.loadAsset(source);
+        ImageAsset asset = assetStorageService.load(source);
         log.debug("Loaded: {}ms bytes={} {}x{} format={} src={}",
                 (System.nanoTime() - t0) / 1_000_000,
                 asset.sizeBytes(), asset.width(), asset.height(),

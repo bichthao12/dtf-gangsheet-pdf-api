@@ -3,9 +3,7 @@ package com.example.dtfgangsheet.service;
 import com.example.dtfgangsheet.dto.request.NestingRequest;
 import com.example.dtfgangsheet.dto.response.GeneratePdfResponse;
 import com.example.dtfgangsheet.dto.response.NestingResponse;
-import com.example.dtfgangsheet.mapper.GangSheetItemMapper;
 import com.example.dtfgangsheet.mapper.NestingInputMapper;
-import com.example.dtfgangsheet.model.GangSheetItem;
 import com.example.dtfgangsheet.model.ImageAsset;
 import com.example.dtfgangsheet.model.NestingInput;
 import org.slf4j.Logger;
@@ -35,37 +33,41 @@ public class NestingService {
     }
 
     public GeneratePdfResponse nestAndGenerate(List<NestingRequest> requests) {
-        List<NestingInput> items = NestingInputMapper.toModels(requests);
+        long tApi = System.nanoTime();
 
+        List<NestingInput> items = NestingInputMapper.toModels(requests);
         logStats(items);
 
         List<String> sources = items.stream().map(NestingInput::img).toList();
-        Map<String, List<Integer>> indices = buildIndices(items);
 
-        List<ImageAsset> assets = imageLoadingService.loadOrdered(sources, indices);
+        long tLoad = System.nanoTime();
+        List<ImageAsset> assets = imageLoadingService.loadOrdered(sources);
+        log.debug("load: {}ms count={}", ms(System.nanoTime() - tLoad), sources.stream().distinct().count());
+
         try {
+            long tNest = System.nanoTime();
             NestingResponse layout = nestingEngine.nest(items, assets);
-
-            log.info("Nesting done — generating PDF: placed={} height={}in usage={}%",
+            log.debug("nesting: {}ms placed={}/{} usage={}% rotated={}",
+                    ms(System.nanoTime() - tNest),
                     layout.stats().totalPlaced(),
-                    String.format("%.3f", layout.stats().sheetHeightInch()),
-                    String.format("%.1f", layout.stats().usagePercent()));
+                    layout.stats().totalRequested(),
+                    String.format("%.1f", layout.stats().usagePercent()),
+                    layout.stats().rotatedCount());
 
-            // Dùng generateWithAssets() — tái dụng assets đã load, không load lại lần 2
-            return pdfService.generateWithAssets(layout.items(), assets);
+            GeneratePdfResponse response = pdfService.generateWithAssets(layout.items(), assets);
+
+            log.debug("api total [POST /api/nesting]: {}ms slots={} pdfId={}",
+                    ms(System.nanoTime() - tApi),
+                    items.stream().mapToInt(NestingInput::quantity).sum(),
+                    response.id());
+
+            return response;
         } finally {
-            // NestingService chịu trách nhiệm cleanup — generateWithAssets() không cleanup
             imageLoadingService.cleanup(assets);
         }
     }
 
-    private Map<String, List<Integer>> buildIndices(List<NestingInput> requests) {
-        Map<String, List<Integer>> map = new LinkedHashMap<>();
-        for (int i = 0; i < requests.size(); i++) {
-            map.computeIfAbsent(requests.get(i).img(), k -> new ArrayList<>()).add(i);
-        }
-        return map;
-    }
+    private long ms(long nanos) { return nanos / 1_000_000; }
 
     private void logStats(List<NestingInput> requests) {
         long unique     = requests.stream().map(NestingInput::img).distinct().count();

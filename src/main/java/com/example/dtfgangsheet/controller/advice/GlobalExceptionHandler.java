@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.List;
+import java.util.UUID;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -103,9 +104,9 @@ public class GlobalExceptionHandler {
         );
     }
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(ImageBatchLoadException.class)
-    public ApiResponse<Void> handleImageBatch(ImageBatchLoadException ex) {
+    public ApiResponse<Void> handleImageBatch(ImageBatchLoadException ex, HttpServletResponse response) {
+        response.setStatus(ex.getHttpStatus().value());
         return ApiResponse.error(
                 ex.getResultCode().getCode(),
                 ex.getResultCode().getMessage(),
@@ -124,11 +125,16 @@ public class GlobalExceptionHandler {
         return ApiResponse.error(ex.getResultCode().getCode(), ex.getMessage());
     }
 
-    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     @ExceptionHandler(ServerException.class)
     public ApiResponse<Void> handleServer(ServerException ex) {
-        log.error("Server error", ex);
-        return ApiResponse.error(ex.getResultCode().getCode(), ex.getResultCode().getMessage());
+        String requestId = UUID.randomUUID().toString();
+        log.error("Server error requestId={}", requestId, ex);
+        return new ApiResponse<>(
+                ex.getResultCode().getCode(),
+                ex.getResultCode().getMessage(),
+                requestId,   // trả requestId về client để support có thể lookup log
+                null, null
+        );
     }
 
     /** AppException còn lại — httpStatus lấy từ exception */

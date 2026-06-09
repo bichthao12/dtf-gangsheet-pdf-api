@@ -9,7 +9,7 @@ app:
   image:
     max-bytes: ${APP_IMAGE_MAX_BYTES:1073741824}
     max-total-bytes-per-request: ${APP_IMAGE_MAX_TOTAL_BYTES_PER_REQUEST:5368709120}
-    max-items-per-request: ${APP_IMAGE_MAX_ITEMS_PER_REQUEST:50}
+    max-items-per-request: ${APP_IMAGE_MAX_ITEMS_PER_REQUEST:200}
     render-dpi: ${APP_IMAGE_RENDER_DPI:300}
     max-raster-pixels: ${APP_IMAGE_MAX_RASTER_PIXELS:40000000}
     http-max-attempts: ${APP_IMAGE_HTTP_MAX_ATTEMPTS:3}
@@ -26,9 +26,11 @@ app:
   pdf:
     output-dir: ${APP_PDF_OUTPUT_DIR:data/output}
     sheet-width-inch: ${APP_PDF_SHEET_WIDTH_INCH:22}
-    right-padding-inch: ${APP_PDF_RIGHT_PADDING_INCH:5}
-    bottom-padding-inch: ${APP_PDF_BOTTOM_PADDING_INCH:0.25}
+    right-padding-inch: ${APP_PDF_RIGHT_PADDING_INCH:0.1}
+    bottom-padding-inch: ${APP_PDF_BOTTOM_PADDING_INCH:1}
     item-gap-inch: ${APP_PDF_ITEM_GAP_INCH:0.1}
+    qr-code-size-inch: ${APP_PDF_QR_CODE_SIZE_INCH:2.0}
+    qr-code-margin-inch: ${APP_PDF_QR_CODE_MARGIN_INCH:0.25}
 
 
 logging:

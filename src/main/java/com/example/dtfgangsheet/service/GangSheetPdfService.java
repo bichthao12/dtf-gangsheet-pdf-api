@@ -61,59 +61,64 @@ public class GangSheetPdfService {
      * Entry point từ GangSheetController — tự load ảnh từ items.img.
      */
     public GeneratePdfResponse generate(List<GangSheetItemRequest> requests) {
+        long tApi = System.nanoTime();
+
         List<GangSheetItem> items = GangSheetItemMapper.toModels(requests);
         layoutService.validateRequest(items);
 
-        // Extract sources 1 lần thay vì 3 lần
         List<String> sources = items.stream().map(GangSheetItem::img).toList();
         enforceLocalSizeBudget(sources);
 
         SheetLayout layout = layoutService.computeLayout(items);
 
-        Map<String, List<Integer>> indices = buildIndices(sources);
-        List<ImageAsset> assets = imageLoadingService.loadOrdered(sources, indices);
-
-        String id     = UUID.randomUUID().toString();
-        String name   = "gang-sheet-" + id + ".pdf";
-        Path   output = Path.of(outputDir).resolve(name).normalize();
+        long tLoad = System.nanoTime();
+        List<ImageAsset> assets = imageLoadingService.loadOrdered(sources);
+        log.debug("load: {}ms count={}", ms(System.nanoTime() - tLoad), sources.stream().distinct().count());
 
         try {
             imageLoadingService.enforceLoadedSizeBudget(assets, maxTotalBytesPerRequest);
-            return doRender(items, assets, layout);
+
+            long tRender = System.nanoTime();
+            GeneratePdfResponse response = doRender(items, assets, layout);
+            log.debug("render: {}ms", ms(System.nanoTime() - tRender));
+            log.debug("api total [POST /api/gang-sheets/pdf]: {}ms items={} pdfId={}",
+                    ms(System.nanoTime() - tApi), items.size(), response.id());
+
+            return response;
         } catch (IOException e) {
-            deleteQuietly(output);   // ← thêm dòng này
             log.error("PDF generation failed: items={}", items.size(), e);
             throw new ServerException(ApiResultCode.PDF_GENERATION_FAILED);
         } finally {
             imageLoadingService.cleanup(assets);
         }
     }
-    /**
-     * Entry point từ NestingService — assets đã load sẵn, không load lại.
-     * Tránh double-load ảnh khi nesting.
-     */
+
     public GeneratePdfResponse generateWithAssets(List<GangSheetItem> items,
                                                   List<ImageAsset> assets) {
-        // Convert GangSheetItem → GangSheetItemRequest để tái dụng layout/render
-        List<GangSheetItem> requests = items.stream()
-                .map(i -> new GangSheetItem(
-                        i.img(), i.x(), i.y(), i.width(), i.height(), i.rotation(), i.dpi()))
+        // assets từ NestingService chỉ chứa unique assets (deduplicated).
+        // items có thể nhiều hơn assets do quantity expand.
+        // Cần map lại: mỗi item → asset theo img source.
+        Map<String, ImageAsset> assetBySource = new LinkedHashMap<>();
+        for (ImageAsset asset : assets) {
+            assetBySource.put(asset.source(), asset);
+        }
+
+        // Expand assets theo thứ tự items
+        List<ImageAsset> expandedAssets = items.stream()
+                .map(item -> assetBySource.get(item.img()))
                 .toList();
 
-        layoutService.validateRequest(requests);
-        imageLoadingService.enforceLoadedSizeBudget(assets, maxTotalBytesPerRequest);
-
-        SheetLayout layout = layoutService.computeLayout(requests);
+        layoutService.validateRequest(items);
+        imageLoadingService.enforceLoadedSizeBudget(expandedAssets, maxTotalBytesPerRequest);
+        SheetLayout layout = layoutService.computeLayout(items);
 
         try {
-            return doRender(requests, assets, layout);
+            return doRender(items, expandedAssets, layout);
         } catch (IOException e) {
             log.error("PDF generation failed: items={}", items.size(), e);
             throw new ServerException(ApiResultCode.PDF_GENERATION_FAILED);
         }
-        // Không cleanup assets ở đây — NestingService chịu trách nhiệm cleanup
     }
-
     // =========================================================================
     // Internal
     // =========================================================================
@@ -126,14 +131,23 @@ public class GangSheetPdfService {
         Path   output = Path.of(outputDir).resolve(name).normalize();
 
         long tStart = System.nanoTime();
-        List<String> warnings = renderService.render(output, layout, items, assets);
-        log.debug("PDF rendered: {}ms items={}", ms(System.nanoTime() - tStart), items.size());
+        try {
+            List<String> warnings = renderService.render(output, layout, items, assets);
+            log.debug("PDF rendered: {}ms items={}", ms(System.nanoTime() - tStart), items.size());
 
-        return new GeneratePdfResponse(
-                id, name, "/api/gang-sheets/" + id + "/download", items.size(),
-                new PdfSheetResponse(layout.widthInch(), layout.heightInch(), "INCH"),
-                warnings.isEmpty() ? null : warnings
-        );
+            return new GeneratePdfResponse(
+                    id, name, "/api/gang-sheets/" + id + "/download", items.size(),
+                    new PdfSheetResponse(layout.widthInch(), layout.heightInch(), "INCH"),
+                    warnings.isEmpty() ? null : warnings
+            );
+        } catch (IOException e) {
+            // Xóa file partial ngay tại đây
+            try { Files.deleteIfExists(output); }
+            catch (IOException ignored) {
+                log.warn("Failed to delete partial PDF: {}", output);
+            }
+            throw e;
+        }
     }
 
     private void enforceLocalSizeBudget(List<String> sources) {
@@ -152,19 +166,6 @@ public class GangSheetPdfService {
                                 .formatted(total, maxTotalBytesPerRequest));
             }
         }
-    }
-
-    private Map<String, List<Integer>> buildIndices(List<String> sources) {
-        Map<String, List<Integer>> map = new LinkedHashMap<>();
-        for (int i = 0; i < sources.size(); i++) {
-            map.computeIfAbsent(sources.get(i), k -> new ArrayList<>()).add(i);
-        }
-        return map;
-    }
-
-    private void deleteQuietly(Path path) {
-        try { Files.deleteIfExists(path); }
-        catch (IOException e) { log.warn("Failed to delete partial PDF: {}", path); }
     }
 
     private long ms(long nanos) { return nanos / 1_000_000; }
