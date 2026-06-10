@@ -117,6 +117,7 @@ HTTP status: `500 Internal Server Error`
 
 ## Notes
 
+- `img` accepts an `http(s)` URL, a local file path, or a base64 data URL such as `data:image/png;base64,...`.
 - `status` is not returned in the response body. HTTP status already expresses request state.
 - `timestamp` is not returned.
 - `errors` only appears on error responses.

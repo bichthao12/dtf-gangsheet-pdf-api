@@ -22,6 +22,7 @@ import java.net.URI;
 import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -66,9 +67,7 @@ public class AssetStorageServiceImpl implements AssetStorageService {
             }
 
             long tFetch = System.nanoTime();
-            LoadedFile loadedFile = isHttpUrl(source)
-                    ? loadFileFromUrl(source)
-                    : loadFileFromLocalPath(source);
+            LoadedFile loadedFile = resolveLoadedFile(source);
             log.debug("fetch: {}ms bytes={} src={}",
                     (System.nanoTime() - tFetch) / 1_000_000,
                     loadedFile.sizeBytes(), source);
@@ -114,6 +113,15 @@ public class AssetStorageServiceImpl implements AssetStorageService {
         }
     }
 
+    private LoadedFile resolveLoadedFile(String source) throws IOException {
+        if (isDataUrl(source)) {
+            return loadFileFromDataUrl(source);
+        }
+        return isHttpUrl(source)
+                ? loadFileFromUrl(source)
+                : loadFileFromLocalPath(source);
+    }
+
     private LoadedFile loadFileFromLocalPath(String img) throws IOException {
         Path path = Path.of(img).toAbsolutePath().normalize();
 
@@ -129,6 +137,45 @@ public class AssetStorageServiceImpl implements AssetStorageService {
         validateImageSize(sizeBytes, img);
 
         return new LoadedFile(path, sizeBytes, false);
+    }
+
+    private LoadedFile loadFileFromDataUrl(String dataUrl) throws IOException {
+        int commaIndex = dataUrl.indexOf(',');
+        if (commaIndex <= "data:".length()) {
+            throw new ImageLoadException("Invalid image data URL");
+        }
+
+        String metadata = dataUrl.substring(5, commaIndex);
+        if (!metadata.contains(";base64")) {
+            throw new UnsupportedImageFormatException(
+                    "Only base64 image data URLs are supported");
+        }
+
+        String mediaType = metadata.substring(0, metadata.indexOf(';')).trim().toLowerCase();
+        if (!mediaType.isEmpty() && !isSupportedImageContentType(mediaType)) {
+            throw new UnsupportedImageFormatException(
+                    "Unsupported image format. contentType=" + mediaType + ", source=data URL");
+        }
+
+        String payload = dataUrl.substring(commaIndex + 1).trim();
+        byte[] decodedBytes;
+        try {
+            decodedBytes = Base64.getMimeDecoder().decode(payload);
+        } catch (IllegalArgumentException ex) {
+            throw new ImageLoadException("Invalid base64 image data", ex);
+        }
+
+        validateImageSize(decodedBytes.length, "data URL");
+
+        Path tempFile = createTempFile(".img");
+        try {
+            Files.write(tempFile, decodedBytes);
+        } catch (IOException ex) {
+            deleteTempFileQuietly(tempFile);
+            throw ex;
+        }
+
+        return new LoadedFile(tempFile, decodedBytes.length, true);
     }
 
     private void validateInputRasterPixels(ImageSize imageSize, String source) {
@@ -293,7 +340,7 @@ public class AssetStorageServiceImpl implements AssetStorageService {
      */
     @Override
     public long peekLocalSize(String img) {
-        if (img == null || img.isBlank() || isHttpUrl(img)) return -1L;
+        if (img == null || img.isBlank() || isHttpUrl(img) || isDataUrl(img)) return -1L;
         Path path = Path.of(img).normalize();
         if (!Files.isRegularFile(path)) return -1L;
         try {
@@ -711,6 +758,10 @@ public class AssetStorageServiceImpl implements AssetStorageService {
     private boolean isHttpUrl(String value) {
         String lower = value.toLowerCase();
         return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+
+    private boolean isDataUrl(String value) {
+        return value.regionMatches(true, 0, "data:", 0, 5);
     }
 
     private record ImageSize(int width, int height) {
