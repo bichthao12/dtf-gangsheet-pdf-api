@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plan: Gangsheet PDF Service</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #f8f9fb;
+      --surface: #ffffff;
+      --text: #1a1d26;
+      --muted: #5c6370;
+      --border: #e2e6ee;
+      --accent: #2563eb;
+      --accent-soft: #eff6ff;
+      --code-bg: #f1f5f9;
+      --success: #059669;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      font-size: 15px;
+    }
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+    header {
+      background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
+      color: #fff;
+      padding: 2.5rem 1.5rem;
+      margin-bottom: 2rem;
+    }
+    header .container { padding: 0 1.5rem; }
+    header h1 { margin: 0 0 0.5rem; font-size: 1.75rem; font-weight: 700; }
+    header .overview { margin: 0; opacity: 0.92; max-width: 720px; font-size: 1rem; }
+    .meta { font-size: 0.85rem; opacity: 0.75; margin-top: 1rem; }
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 1.25rem;
+    }
+    h2 {
+      margin: 0 0 1rem;
+      font-size: 1.25rem;
+      color: var(--text);
+      border-bottom: 2px solid var(--accent-soft);
+      padding-bottom: 0.5rem;
+    }
+    h3 { margin: 1.25rem 0 0.6rem; font-size: 1.05rem; color: #334155; }
+    h3:first-child { margin-top: 0; }
+    h4 { margin: 1rem 0 0.5rem; font-size: 0.95rem; color: #475569; }
+    p { margin: 0.5rem 0; }
+    ul { margin: 0.5rem 0; padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    .scope-in { border-left: 4px solid var(--success); padding-left: 1rem; margin: 1rem 0; }
+    .scope-out { border-left: 4px solid var(--muted); padding-left: 1rem; margin: 1rem 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 0.75rem 0;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.55rem 0.75rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: var(--accent-soft); font-weight: 600; }
+    pre, code {
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 0.85rem;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+      margin: 0.75rem 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    code { background: var(--code-bg); padding: 0.15em 0.4em; border-radius: 4px; }
+    pre code { background: none; padding: 0; }
+    .mermaid {
+      background: #fafbfc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin: 1rem 0;
+      overflow-x: auto;
+    }
+    .todos { list-style: none; padding: 0; margin: 0; }
+    .todos li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .todos li:last-child { border-bottom: none; }
+    .todos input { margin-top: 0.35rem; accent-color: var(--accent); }
+    .todos label { flex: 1; cursor: pointer; }
+    .badge {
+      display: inline-block;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.2em 0.55em;
+      border-radius: 4px;
+      margin-right: 0.35rem;
+    }
+    .phase { margin-top: 1rem; }
+    .phase h3 { color: var(--accent); }
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+      padding: 2rem 1rem;
+    }
+    @media print {
+      header { background: #1e3a5f; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <h1>Plan: Gangsheet PDF Service</h1>
+      <p class="overview">Xây dựng BE service gồm API upload ảnh (lưu nội bộ), API thay thế bản đã chỉnh sửa, và API render PDF gang-sheet từ layout do FE nesting cung cấp. BE không làm bin-packing — trách nhiệm tiết kiệm film thuộc FE.</p>
+      <p class="meta">Greenfield · DTF gang-sheet · PNG / WEBP / AVIF · ảnh lớn 20–100 MB</p>
+    </div>
+  </header>
+
+  <div class="container">
+
+    <section id="todos">
+      <h2>Checklist triển khai</h2>
+      <ul class="todos">
+        <li><input type="checkbox" id="t1" /><label for="t1"><span class="badge">API</span> Chốt OpenAPI spec: upload, replace, render PDF, download — đơn vị inch, rotation, quantity</label></li>
+        <li><input type="checkbox" id="t2" /><label for="t2"><span class="badge">Phase 1</span> Image upload/replace API + local storage + metadata DB (imageId, version, dimensions)</label></li>
+        <li><input type="checkbox" id="t3" /><label for="t3"><span class="badge">Phase 1</span> PDF render service — validate layout, decode PNG/WEBP/AVIF, embed PDFBox, atomic save</label></li>
+        <li><input type="checkbox" id="t4" /><label for="t4"><span class="badge">Phase 1</span> E2E test flow upload → replace → render với fixture lớn (20–100 MB) + DPI warnings</label></li>
+        <li><input type="checkbox" id="t5" /><label for="t5"><span class="badge">Phase 2</span> Docker/deploy docs, auth, TTL cleanup, concurrency limits decode</label></li>
+        <li><input type="checkbox" id="t6" /><label for="t6"><span class="badge">FE</span> Sync với FE: coordinate system, sheet height, replace semantics, error codes</label></li>
+      </ul>
+    </section>
+
+    <section id="context">
+      <h2>Bối cảnh nghiệp vụ</h2>
+      <p>Dịch vụ in DTF (Direct-to-Film) cần xuất <strong>một tấm film</strong> (gang-sheet) chứa nhiều thiết kế đã được xếp chồng để in một lần. Chiều rộng film cố định theo máy in (mặc định <strong>22 inch</strong>); chiều dài phụ thuộc cách xếp ảnh. File thiết kế thường rất lớn (20–100 MB) do độ phân giải cao phục vụ in.</p>
+
+      <h3>Vai trò các bên</h3>
+      <table>
+        <thead><tr><th>Actor</th><th>Trách nhiệm</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Khách / designer</strong></td><td>Upload file thiết kế qua FE (PNG, WEBP, AVIF)</td></tr>
+          <tr><td><strong>Đội chỉnh sửa ảnh</strong></td><td>Thay file gốc bằng bản đã sửa (tách nền, chỉnh màu…) qua API replace — <strong>giữ nguyên imageId</strong></td></tr>
+          <tr><td><strong>FE nesting tool</strong></td><td>Bin-packing: tính <code>x, y, width, height, rotation</code>; tối ưu chiều dài film</td></tr>
+          <tr><td><strong>Gangsheet API (BE)</strong></td><td>Lưu ảnh, validate layout, decode &amp; ghép PDF, trả link tải + cảnh báo DPI</td></tr>
+          <tr><td><strong>Máy in / RIP</strong></td><td>Nhận PDF gang-sheet, in lên film DTF</td></tr>
+        </tbody>
+      </table>
+
+      <div class="mermaid">
+sequenceDiagram
+    participant User
+    participant FE as FE_NestingTool
+    participant Team as EditTeam
+    participant BE as GangsheetAPI
+    participant Store as ObjectStore
+
+    User->>FE: Upload ảnh gốc
+    FE->>BE: POST /api/images
+    BE->>Store: Lưu file + metadata DB
+    BE-->>FE: imageId
+
+    Team->>BE: POST /api/images/{id}/replace
+    BE->>Store: Lưu bản edited, version++
+    BE-->>FE: imageId (cùng ID)
+
+    FE->>FE: Nesting bin-packing
+    FE->>BE: POST /api/gang-sheets/pdf
+    BE->>Store: Đọc ảnh theo imageId
+    BE->>BE: Validate layout, decode, embed PDF
+    BE->>Store: Lưu PDF output
+    BE-->>FE: pdfId + downloadUrl
+    FE-->>User: Tải PDF in film
+      </div>
+
+      <div class="scope-in">
+        <strong>Trong phạm vi BE</strong>
+        <ul>
+          <li>Upload &amp; quản lý file ảnh (gốc + bản đã sửa)</li>
+          <li>Nhận layout cuối từ FE → validate → render PDF gang-sheet</li>
+          <li>Hỗ trợ ảnh lớn (20–100 MB) với giới hạn byte/pixel và decode có kiểm soát</li>
+          <li>Trả link tải PDF + kích thước sheet + warnings chất lượng in</li>
+        </ul>
+      </div>
+      <div class="scope-out">
+        <strong>Ngoài phạm vi BE</strong>
+        <ul>
+          <li>UI upload / nesting preview (FE)</li>
+          <li>Thuật toán xếp ảnh tiết kiệm film (FE)</li>
+          <li>Workflow nội bộ đội sửa ảnh (BE chỉ cung cấp API thay file)</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="business-flow">
+      <h2>Luồng nghiệp vụ chi tiết</h2>
+
+      <h3>1. Upload ảnh gốc</h3>
+      <table>
+        <thead><tr><th>Bước</th><th>Mô tả</th><th>Kết quả / lỗi</th></tr></thead>
+        <tbody>
+          <tr><td>FE gửi file</td><td><code>POST /api/images</code> multipart, field <code>file</code></td><td>—</td></tr>
+          <tr><td>BE validate</td><td>Format PNG/WEBP/AVIF (MIME + magic bytes); max size/file; đọc width×height ngay lúc upload</td><td>400 nếu corrupt hoặc unsupported</td></tr>
+          <tr><td>BE lưu trữ</td><td>Ghi file + insert DB: <code>imageId</code>, version=1, status=ACTIVE</td><td>—</td></tr>
+          <tr><td>Response</td><td><code>201</code> trả metadata: id, filename, width, height, format, sizeBytes, version</td><td>FE dùng <code>imageId</code> cho nesting</td></tr>
+        </tbody>
+      </table>
+
+      <h3>2. Thay thế ảnh đã chỉnh sửa (edit team)</h3>
+      <table>
+        <thead><tr><th>Bước</th><th>Mô tả</th><th>Ghi chú nghiệp vụ</th></tr></thead>
+        <tbody>
+          <tr><td>Team upload bản mới</td><td><code>POST /api/images/{id}/replace</code></td><td>Cùng <code>imageId</code> — FE không remap layout</td></tr>
+          <tr><td>BE validate &amp; lưu</td><td>Validate format/size; ghi version mới; đánh dấu version cũ REPLACED</td><td>Atomic: ghi file v{n+1} → update DB → xóa v{n} async</td></tr>
+          <tr><td>Invalidate cache</td><td>Mọi decode cache theo (imageId, version) bị vô hiệu</td><td>Render sau replace luôn dùng bản mới</td></tr>
+        </tbody>
+      </table>
+
+      <h3>3. Nesting trên FE</h3>
+      <p>FE nhận danh sách <code>imageId</code> + kích thước in mong muốn (inch) từ user. Công cụ nesting:</p>
+      <ul>
+        <li>Xếp các item trên canvas rộng 22 inch (printable width có thể trừ padding)</li>
+        <li>Tính <code>x, y</code> (góc trên-trái), <code>width, height</code> (inch trên film), <code>rotation</code> (độ)</li>
+        <li>Expand <code>quantity</code> thành nhiều item riêng hoặc gửi kèm quantity — <strong>chốt 1 quy ước với FE</strong></li>
+        <li>Tính <code>sheet.heightInch</code> = chiều dài film sau nesting (đáy xa nhất + margin)</li>
+      </ul>
+
+      <h3>4. Render gang-sheet PDF</h3>
+      <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant FE
+    participant BE as GangsheetAPI
+    participant DB as MetadataDB
+    participant FS as FileStorage
+    participant Render as PDFRenderer
+
+    FE->>BE: POST /api/gang-sheets/pdf
+    Note over FE,BE: Body: sheet + items[{imageId,x,y,w,h,rotation}]
+
+    BE->>BE: Validate schema &amp; geometry
+    BE->>BE: Validate layout trên sheet
+    BE->>DB: Resolve imageId → path, version, dimensions
+  loop Mỗi imageId unique
+        BE->>FS: Đọc file ảnh
+        BE->>BE: Validate format, size budget, input pixels
+    end
+    BE->>Render: Decode subsampled → embed PDFBox
+    loop Mỗi item
+        Render->>Render: Tính decodeSize (inch × DPI)
+        Render->>Render: Draw + rotation quanh tâm
+    end
+    Render->>FS: Save PDF atomic
+    BE-->>FE: 201 pdfId, downloadUrl, sheet, warnings
+      </div>
+
+      <h4>Bước nghiệp vụ render</h4>
+      <table>
+        <thead><tr><th>#</th><th>Bước</th><th>Mô tả</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Nhận request</td><td><code>sheet</code> (widthInch, heightInch, unit) + mảng <code>items</code></td></tr>
+          <tr><td>2</td><td>Validate request</td><td>Schema, số lượng item ≤ limit, geometry hợp lệ</td></tr>
+          <tr><td>3</td><td>Validate layout</td><td>Mỗi item nằm trong sheet; bounding box sau rotation; <code>imageId</code> tồn tại ACTIVE</td></tr>
+          <tr><td>4</td><td>Budget dung lượng</td><td>Tổng bytes ảnh unique ≤ maxTotalBytesPerRequest</td></tr>
+          <tr><td>5</td><td>Load ảnh</td><td>Đọc từ storage theo imageId; parallel theo unique id</td></tr>
+          <tr><td>6</td><td>Decode &amp; embed</td><td>Decode ở resolution cần cho in (subsampling); embed JPEG hoặc lossless nếu alpha</td></tr>
+          <tr><td>7</td><td>Lưu PDF</td><td>Atomic write-then-move; ghi metadata PDF (id, sheet size, warnings)</td></tr>
+          <tr><td>8</td><td>Response</td><td><code>pdfId</code>, <code>downloadUrl</code>, <code>sheet</code>, <code>warnings</code> (DPI thấp nếu có)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>5. Tải PDF</h3>
+      <p><code>GET /api/gang-sheets/{id}/download</code> — stream file PDF đã tạo. PDF có TTL (configurable); job nền dọn file hết hạn.</p>
+
+      <h3>Xử lý ảnh lớn (20–100 MB)</h3>
+      <p>Thiết kế phải chấp nhận file nặng mà không OOM. Chiến lược nhiều tầng:</p>
+      <table>
+        <thead><tr><th>Tầng</th><th>Cơ chế</th><th>Mục đích</th></tr></thead>
+        <tbody>
+          <tr><td>Upload</td><td>Giới hạn <code>maxBytesPerImage</code> (gợi ý 100–200 MB); đọc metadata sớm</td><td>Fail sớm nếu corrupt hoặc quá lớn</td></tr>
+          <tr><td>Request budget</td><td><code>maxTotalBytesPerRequest</code> (gợi ý 2–5 GB unique)</td><td>Tránh request quá nặng</td></tr>
+          <tr><td>Input pixels</td><td><code>maxInputRasterPixels</code> (~200M px)</td><td>Reject metadata quá lớn trước decode</td></tr>
+          <tr><td>Decode target</td><td><code>decodeSize = min(px ảnh, inch × renderDpi)</code></td><td>Chỉ decode đủ cho in, không full raster</td></tr>
+          <tr><td>Decode cap</td><td><code>maxRasterPixelsDecode</code> (~40M px)</td><td>Scale down thêm nếu vẫn vượt</td></tr>
+          <tr><td>PNG / WEBP</td><td>ImageIO subsampling (power of 2)</td><td>Giảm RAM khi decode</td></tr>
+          <tr><td>AVIF</td><td>ffmpeg scale trực tiếp về target size → PNG tạm</td><td>Tránh decode full resolution</td></tr>
+          <tr><td>Cảnh báo</td><td>DPI hiệu dụng &lt; ngưỡng → <code>warnings</code></td><td>Không chặn tạo PDF</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Định dạng ảnh hỗ trợ</h3>
+      <table>
+        <thead><tr><th>Format</th><th>Upload</th><th>Render</th></tr></thead>
+        <tbody>
+          <tr><td>PNG</td><td>✔</td><td>ImageIO + subsampling</td></tr>
+          <tr><td>WEBP</td><td>✔</td><td>ImageIO plugin + subsampling</td></tr>
+          <tr><td>AVIF</td><td>✔</td><td>ffmpeg / ImageIO plugin (libavif)</td></tr>
+          <tr><td>JPEG</td><td>✖</td><td>Không hỗ trợ — tránh mất alpha / chất lượng in</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="architecture">
+      <h2>Kiến trúc đề xuất</h2>
+      <p>Monolith modular (Spring Boot) chia 4 module logic — không cần microservice ở giai đoạn đầu:</p>
+      <table>
+        <thead>
+          <tr><th>Module</th><th>Trách nhiệm</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Image API</strong></td><td>Upload, metadata, thay thế bản edited, download ảnh nội bộ</td></tr>
+          <tr><td><strong>Layout Validator</strong></td><td>Kiểm tra tọa độ, rotation, giới hạn sheet; overlap tuỳ chọn (mặc định không)</td></tr>
+          <tr><td><strong>PDF Renderer</strong></td><td>Decode ảnh → embed vào PDF theo inch/DPI; rotation; cache decode</td></tr>
+          <tr><td><strong>Artifact Store</strong></td><td>Metadata PDF đã tạo, TTL cleanup, download</td></tr>
+        </tbody>
+      </table>
+      <div class="mermaid">
+flowchart LR
+    subgraph api [HTTP Layer]
+        IC[Image Controller]
+        GC[GangSheet Controller]
+    end
+    subgraph core [Core Services]
+        IS[Image Service]
+        LV[Layout Validator]
+        PR[PDF Renderer]
+    end
+    subgraph infra [Infrastructure]
+        DB[(PostgreSQL)]
+        FS[File / Object Storage]
+    end
+    IC --> IS
+    GC --> LV
+    GC --> PR
+    IS --> DB
+    IS --> FS
+    PR --> FS
+    PR --> LV
+      </div>
+    </section>
+
+    <section id="data-model">
+      <h2>Mô hình dữ liệu</h2>
+
+      <h3>Image asset (sau upload)</h3>
+      <pre><code>ImageAsset
+  id: UUID
+  originalFilename: string
+  storagePath: string          // path nội bộ hoặc object key
+  contentType: image/png | image/webp | image/avif
+  sizeBytes: long
+  widthPx: int                 // đọc lúc upload
+  heightPx: int
+  version: int                 // tăng khi team upload bản sửa
+  parentId: UUID?              // nếu là bản replace của ảnh gốc
+  status: ACTIVE | REPLACED
+  createdAt, updatedAt</code></pre>
+
+      <h3>Gangsheet render request (từ FE)</h3>
+      <pre><code>GangSheetRenderRequest
+  sheet:
+    widthInch: number          // cố định theo máy in, vd 22"
+    heightInch: number         // chiều dài film sau nesting — do FE gửi
+    unit: "INCH"
+  items: [
+    {
+      imageId: UUID
+      x: number                // góc trên-trái, inch
+      y: number
+      width: number            // kích thước in trên film, inch
+      height: number
+      rotation: number         // độ
+      quantity: number?        // mặc định 1 — hoặc FE expand trước
+    }
+  ]</code></pre>
+
+      <h3>PDF artifact (output)</h3>
+      <pre><code>GangSheetPdf
+  id: UUID
+  filename: string
+  storagePath: string
+  itemCount: int
+  sheetWidthInch, sheetHeightInch
+  warnings: string[]
+  createdAt
+  expiresAt?</code></pre>
+    </section>
+
+    <section id="api">
+      <h2>API contract</h2>
+
+      <h3>1. Upload ảnh</h3>
+      <p><code>POST /api/images</code> — <code>multipart/form-data</code>, field <code>file</code></p>
+      <ul>
+        <li>Validate: format (PNG/WEBP/AVIF), max size/file (hỗ trợ 20–100 MB)</li>
+        <li>Đọc metadata (width, height) lúc upload — fail sớm nếu corrupt</li>
+      </ul>
+      <p>Response <code>201</code>:</p>
+      <pre><code>{
+  "id": "uuid",
+  "filename": "design-01.png",
+  "width": 4800,
+  "height": 3600,
+  "format": "PNG",
+  "sizeBytes": 52428800,
+  "version": 1
+}</code></pre>
+
+      <p><code>POST /api/images/{id}/replace</code> — team upload bản đã sửa</p>
+      <ul>
+        <li><strong>Giữ cùng id</strong> để FE nesting không phải remap</li>
+        <li>Tăng <code>version</code>, invalidate cache decode cũ</li>
+      </ul>
+      <p><code>GET /api/images/{id}</code> — metadata<br />
+      <code>GET /api/images/{id}/download</code> — stream file</p>
+
+      <h3>2. Render gang-sheet PDF</h3>
+      <p><code>POST /api/gang-sheets/pdf</code> — body <code>GangSheetRenderRequest</code></p>
+      <pre><code>{
+  "id": "pdf-uuid",
+  "filename": "gang-sheet-xxx.pdf",
+  "downloadUrl": "/api/gang-sheets/{id}/download",
+  "itemCount": 42,
+  "sheet": { "widthInch": 22, "heightInch": 180, "unit": "INCH" },
+  "warnings": ["Item at index 3 has low DPI. actualDpi=118, recommendedDpi>=150"]
+}</code></pre>
+      <p><code>GET /api/gang-sheets/{id}/download</code> — tải PDF</p>
+
+      <h3>3. Health &amp; ops</h3>
+      <ul>
+        <li><code>GET /health</code> — app + disk/storage writable</li>
+        <li><code>GET /ready</code> — decode smoke test (optional)</li>
+      </ul>
+    </section>
+
+    <section id="render-flow">
+      <h2>Luồng kỹ thuật render PDF</h2>
+      <div class="mermaid">
+flowchart TD
+    A[POST /api/gang-sheets/pdf] --> B[Validate request schema]
+    B --> C[Validate từng item]
+    C --> D[Resolve ImageAsset theo imageId]
+    D --> E[Validate layout trên sheet]
+    E --> F[Parallel load ảnh unique]
+    F --> G[Budget tổng size bytes]
+    G --> H[PDDocument render]
+    H --> I{Với mỗi item}
+    I --> J[Tính decodeSize từ inch × DPI]
+    J --> K[Decode subsampled / ffmpeg AVIF]
+    K --> L[Embed JPEG hoặc lossless nếu alpha]
+    L --> M[Draw với matrix rotation]
+    M --> N[Save PDF atomic write-then-move]
+    N --> O[Trả response + warnings]
+      </div>
+
+      <h3>Quy tắc validate layout (BE)</h3>
+      <ul>
+        <li><code>sheet.widthInch</code> khớp config máy in (vd 22")</li>
+        <li><code>sheet.heightInch</code> do FE gửi sau nesting — BE validate items nằm trong sheet</li>
+        <li>Mỗi item: <code>width</code>, <code>height</code> &gt; 0; <code>rotation</code> hợp lệ</li>
+        <li><code>x &gt;= 0</code>, <code>y &gt;= 0</code>; bounding box sau rotation nằm trong sheet</li>
+        <li><code>imageId</code> tồn tại, status ACTIVE</li>
+        <li>Tổng item ≤ limit; tổng dung lượng ảnh unique ≤ budget</li>
+        <li><strong>Không</strong> validate overlap — FE chịu trách nhiệm nesting</li>
+      </ul>
+
+      <h3>Quy tắc decode / chất lượng in</h3>
+      <ul>
+        <li><code>renderDpi</code> (vd 300): <code>decodeWidth = min(imageWidthPx, ceil(item.widthInch × renderDpi))</code></li>
+        <li>Cap <code>maxRasterPixels</code> tránh OOM với ảnh 20–100 MB</li>
+        <li>Subsampling khi decode PNG/WEBP</li>
+        <li>AVIF: ffmpeg hoặc ImageIO plugin + libavif — document dependency deploy</li>
+        <li>Warning nếu effective DPI &lt; ngưỡng (vd 150) — không block render</li>
+      </ul>
+
+      <h3>PDF kỹ thuật</h3>
+      <ul>
+        <li>Apache PDFBox 3.x</li>
+        <li>1 page = 1 gang-sheet; page size = <code>sheet.widthInch × sheet.heightInch</code> (points = inch × 72)</li>
+        <li>Gốc tọa độ: <strong>top-left, đơn vị inch</strong> → convert PDF points, flip Y</li>
+        <li>Rotation quanh tâm item</li>
+        <li>Alpha: LosslessFactory; không alpha: JPEGFactory ~0.95</li>
+        <li>Cache <code>PDImageXObject</code> theo <code>(imageId, version, decodeSize)</code></li>
+      </ul>
+    </section>
+
+    <section id="storage">
+      <h2>Storage &amp; upload</h2>
+      <h3>Giai đoạn 1 — local filesystem</h3>
+      <pre><code>data/
+  images/{yyyy}/{mm}/{imageId}/v{version}.{ext}
+  output/gang-sheet-{pdfId}.pdf
+  tmp/...</code></pre>
+      <ul>
+        <li>Upload API + metadata DB (PostgreSQL / SQLite dev)</li>
+        <li>Atomic replace: ghi v{n+1} → update DB → xóa v{n} async</li>
+        <li>Background job cleanup PDF/ảnh quá TTL</li>
+      </ul>
+
+      <h3>Giai đoạn 2 — object storage</h3>
+      <ul>
+        <li>S3-compatible: presigned URL hoặc BE proxy upload</li>
+        <li>DB giữ metadata + s3Key</li>
+      </ul>
+
+      <h3>Giới hạn đề xuất</h3>
+      <table>
+        <thead><tr><th>Config</th><th>Gợi ý</th><th>Ghi chú</th></tr></thead>
+        <tbody>
+          <tr><td>maxBytesPerImage</td><td>100–200 MB</td><td>Phù hợp file 20–100 MB thực tế</td></tr>
+          <tr><td>maxTotalBytesPerRequest</td><td>2–5 GB</td><td>Unique imageId</td></tr>
+          <tr><td>maxItemsPerRequest</td><td>200</td><td></td></tr>
+          <tr><td>maxInputRasterPixels</td><td>~200M px</td><td>Validate metadata</td></tr>
+          <tr><td>maxRasterPixelsDecode</td><td>~40M px</td><td>Cap lúc render</td></tr>
+          <tr><td>sheetWidthInch</td><td>22 (DTF)</td><td></td></tr>
+          <tr><td>renderDpi</td><td>300</td><td></td></tr>
+          <tr><td>warningDpi</td><td>150</td><td>Cảnh báo, không block</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="security">
+      <h2>Bảo mật &amp; vận hành</h2>
+      <ul>
+        <li>Auth: API key / JWT giữa FE và BE</li>
+        <li>Upload: whitelist MIME + magic-byte detect</li>
+        <li>Path traversal: chỉ <code>imageId</code> UUID, không nhận raw path từ client</li>
+        <li>Rate limit upload + render</li>
+        <li>Idempotency key trên <code>POST /api/gang-sheets/pdf</code> (optional)</li>
+        <li>Logging &amp; metrics: latency, decode failures, PDF size, OOM guard</li>
+        <li>JVM heap sizing cho workload ảnh lớn; giới hạn concurrency decode/ffmpeg</li>
+      </ul>
+    </section>
+
+    <section id="phases">
+      <h2>Triển khai theo phase</h2>
+      <div class="phase">
+        <h3>Phase 1 — MVP (2–3 sprint)</h3>
+        <ul>
+          <li>Upload API + local storage + metadata DB</li>
+          <li>Replace API (cùng imageId)</li>
+          <li>Render PDF API nhận layout từ FE</li>
+          <li>PNG + WEBP + AVIF</li>
+          <li>Download PDF + validation + DPI warnings</li>
+          <li>Test E2E với fixture 20–100 MB</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <h3>Phase 2 — Production hardening</h3>
+        <ul>
+          <li>Docker/deploy docs (storage, ffmpeg, JVM heap)</li>
+          <li>Auth, rate limit, TTL cleanup</li>
+          <li>Concurrency limit decode</li>
+          <li>Integration tests fixture 50–100 MB</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <h3>Phase 3 — Scale</h3>
+        <ul>
+          <li>Object storage + presigned upload</li>
+          <li>Async render queue nếu PDF &gt; 30s</li>
+          <li>Multi-tenant, audit log version ảnh</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="fe-sync">
+      <h2>Rủi ro cần chốt sớm với FE</h2>
+      <table>
+        <thead><tr><th>Chủ đề</th><th>Quy ước đề xuất</th></tr></thead>
+        <tbody>
+          <tr><td>Đơn vị</td><td>Inch end-to-end; FE gửi <code>unit: INCH</code></td></tr>
+          <tr><td>Gốc tọa độ</td><td>Top-left của sheet</td></tr>
+          <tr><td>heightInch sheet</td><td><strong>FE gửi</strong> sau nesting — BE validate items nằm trong</td></tr>
+          <tr><td>Tham chiếu ảnh</td><td><code>imageId</code> UUID từ upload API — không gửi raw URL/path</td></tr>
+          <tr><td>Ảnh edited</td><td><code>POST /images/{id}/replace</code> giữ nguyên id</td></tr>
+          <tr><td>Quantity</td><td>FE expand items hoặc 1 item + quantity — chọn 1 quy ước</td></tr>
+          <tr><td>Rotation</td><td>FE và BE dùng cùng công thức bounding box (tâm = giữa item)</td></tr>
+          <tr><td>Ảnh lớn</td><td>FE hiển thị cảnh báo nếu file &gt; ngưỡng; BE enforce limit</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="tech">
+      <h2>Công nghệ đề xuất</h2>
+      <ul>
+        <li><strong>Runtime:</strong> Java 21 LTS + Spring Boot 3</li>
+        <li><strong>PDF:</strong> Apache PDFBox 3.x</li>
+        <li><strong>WEBP:</strong> webp-imageio</li>
+        <li><strong>AVIF:</strong> ffmpeg on server hoặc ImageIO plugin + libavif</li>
+        <li><strong>DB:</strong> PostgreSQL; H2 cho dev</li>
+        <li><strong>Storage:</strong> Local FS → S3</li>
+      </ul>
+    </section>
+
+    <section id="dod">
+      <h2>Definition of Done (MVP)</h2>
+      <ul>
+        <li>Team replace ảnh qua API, FE nesting dùng cùng <code>imageId</code></li>
+        <li><code>POST /api/gang-sheets/pdf</code> với ≥1 ảnh 20 MB+ tạo PDF đúng vị trí/rotation</li>
+        <li>PDF page khớp <code>sheet.widthInch × sheet.heightInch</code></li>
+        <li>Request invalid trả 4xx có mã lỗi rõ</li>
+        <li>README deploy: storage path, limits, format support, ffmpeg dependency</li>
+      </ul>
+    </section>
+
+    <footer>
+      Gangsheet PDF Service Plan · Mở file này bằng trình duyệt để xem diagram Mermaid
+    </footer>
+  </div>
+
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+  </script>
+</body>
+</html>
