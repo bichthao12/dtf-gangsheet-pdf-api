@@ -37,3 +37,23 @@ build/
 
 ### Mac OS ###
 .DS_Store
+gangsheet-pdf-test-cases.txt
+data/db/gangsheet.mv.db
+data/images/1f.png
+data/images/2f.png
+data/images/3f.png
+data/images/4f.png
+data/images/5f (1).png
+data/images/5f (3).png
+data/images/5f (4).png
+data/images/5f (5).png
+data/images/5f (6).png
+data/images/5f (7).png
+data/images/6f.png
+data/images/50mb.png
+data/images/60mb.png
+data/images/70mb.png
+data/images/avifsample.avif
+data/images/pngsample.png
+data/images/samplejpg.jpg
+data/images/webpsample.webp

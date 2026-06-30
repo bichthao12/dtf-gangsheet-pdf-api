@@ -8,7 +8,13 @@ import lombok.RequiredArgsConstructor;
 public enum ApiResultCode {
 
     // Success
-    PDF_CREATED      ("MGS_1", "PDF created successfully"),
+    PDF_CREATED           ("MGS_1",  "PDF created successfully"),
+    GANG_SHEET_SAVED      ("MGS_30", "Gang sheet saved as draft"),
+    CART_ITEM_ADDED       ("MGS_31", "Item added to cart"),
+    GANG_SHEET_SAVED_TO_CART ("MGS_42", "Gang sheet saved and added to cart"),
+    GANG_SHEETS_LISTED    ("MGS_32", "OK"),
+    ORDER_SUBMITTED       ("MGS_33", "Order submitted successfully"),
+    ORDERS_LISTED         ("MGS_36", "OK"),
 
     // Client errors
     BAD_REQUEST      ("MGS_2", "Invalid request"),
@@ -22,6 +28,12 @@ public enum ApiResultCode {
     UNSUPPORTED_IMAGE_FORMAT("MGS_12", "Unsupported image format"),
     IMAGE_FETCH_ERROR("MGS_13", "Cannot load image from URL"),
     INVALID_GANG_SHEET_LAYOUT("MGS_14", "Invalid gang sheet layout"),
+    GANG_SHEET_NOT_FOUND     ("MGS_34", "Gang sheet not found"),
+    GANG_SHEET_CONFIRMED     ("MGS_35", "Gang sheet is confirmed and cannot be modified"),
+    CART_LINE_NOT_FOUND      ("MGS_37", "Cart line not found"),
+    CART_EMPTY               ("MGS_38", "Cart is empty"),
+    ORDER_NOT_FOUND          ("MGS_39", "Order not found"),
+    GANG_SHEET_NOT_ADDABLE   ("MGS_41", "Confirmed gang sheet cannot be added to cart"),
 
     // Server errors
     PDF_IO_ERROR     ("MGS_8", "I/O error while generating PDF"),

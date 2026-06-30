@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -63,6 +64,15 @@ public class GlobalExceptionHandler {
                 ApiResultCode.VALIDATION_ERROR.getMessage(),
                 errors
         );
+    }
+
+    /** Query/path param sai kiểu — ví dụ status=INVALID */
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ApiResponse<Void> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String field = ex.getName();
+        String message = "Invalid value for parameter '%s'".formatted(field);
+        return ApiResponse.error(ApiResultCode.BAD_REQUEST.getCode(), message);
     }
 
     /** @Valid trên List<@Valid T> hoặc @Validated trên controller method params */

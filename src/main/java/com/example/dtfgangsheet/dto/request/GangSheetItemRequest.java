@@ -22,6 +22,12 @@ public record GangSheetItemRequest(
 
         double rotation,
 
+        Boolean flipH,
+
+        Boolean flipV,
+
+        CropRequest crop,
+
         Integer dpi
 ) {
 }

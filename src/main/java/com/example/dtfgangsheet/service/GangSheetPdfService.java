@@ -8,6 +8,7 @@ import com.example.dtfgangsheet.model.GangSheetItem;
 import com.example.dtfgangsheet.dto.request.GangSheetItemRequest;
 import com.example.dtfgangsheet.dto.response.GeneratePdfResponse;
 import com.example.dtfgangsheet.dto.response.PdfSheetResponse;
+import com.example.dtfgangsheet.model.SheetSpec;
 import com.example.dtfgangsheet.exception.ImageSizeExceededException;
 import com.example.dtfgangsheet.exception.ServerException;
 import com.example.dtfgangsheet.model.ImageAsset;
@@ -69,7 +70,7 @@ public class GangSheetPdfService {
         List<String> sources = items.stream().map(GangSheetItem::img).toList();
         enforceLocalSizeBudget(sources);
 
-        SheetLayout layout = layoutService.computeLayout(items);
+        SheetLayout layout = layoutService.computePrintLayout(items);
 
         long tLoad = System.nanoTime();
         List<ImageAsset> assets = imageLoadingService.loadOrdered(sources);
@@ -110,7 +111,7 @@ public class GangSheetPdfService {
 
         layoutService.validateRequest(items);
         imageLoadingService.enforceLoadedSizeBudget(expandedAssets, maxTotalBytesPerRequest);
-        SheetLayout layout = layoutService.computeLayout(items);
+        SheetLayout layout = layoutService.computePrintLayout(items);
 
         try {
             return doRender(items, expandedAssets, layout);
@@ -137,7 +138,7 @@ public class GangSheetPdfService {
 
             return new GeneratePdfResponse(
                     id, name, "/api/gang-sheets/" + id + "/download", items.size(),
-                    new PdfSheetResponse(layout.widthInch(), layout.heightInch(), "INCH"),
+                    new PdfSheetResponse(layout.widthInch(), layout.heightInch(), SheetSpec.UNIT_INCH),
                     warnings.isEmpty() ? null : warnings
             );
         } catch (IOException e) {
