@@ -72,6 +72,8 @@ public class GangSheetPdfService {
 
         SheetLayout layout = layoutService.computePrintLayout(items);
 
+        // Image load failures → ImageBatchLoadException → GlobalExceptionHandler (no catch here).
+        // Cleanup on load failure is done inside ImageLoadingService before throw.
         long tLoad = System.nanoTime();
         List<ImageAsset> assets = imageLoadingService.loadOrdered(sources);
         log.debug("load: {}ms count={}", ms(System.nanoTime() - tLoad), sources.stream().distinct().count());

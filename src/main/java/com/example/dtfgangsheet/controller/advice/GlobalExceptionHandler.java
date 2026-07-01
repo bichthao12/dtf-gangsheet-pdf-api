@@ -20,6 +20,10 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Maps exceptions to {@link ApiResponse} + HTTP status.
+ * Services throw domain exceptions; controllers do not catch — keep mapping centralized here.
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -132,13 +136,14 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(ServerException.class)
-    public ApiResponse<Void> handleServer(ServerException ex) {
+    public ApiResponse<Void> handleServer(ServerException ex, HttpServletResponse response) {
+        response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR.value());
         String requestId = UUID.randomUUID().toString();
         log.error("Server error requestId={}", requestId, ex);
         return new ApiResponse<>(
                 ex.getResultCode().getCode(),
                 ex.getResultCode().getMessage(),
-                requestId, // trả requestId về client để support có thể lookup log
+                requestId,
                 null, null);
     }
 
