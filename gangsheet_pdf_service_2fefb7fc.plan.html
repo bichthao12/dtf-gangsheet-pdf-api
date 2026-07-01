@@ -39,7 +39,7 @@
     header .container { padding: 0 1.5rem; }
     header h1 { margin: 0 0 0.5rem; font-size: 1.75rem; font-weight: 700; }
     header .overview { margin: 0; opacity: 0.92; max-width: 760px; font-size: 1rem; }
-    .meta { font-size: 0.85rem; opacity: 0.75; margin-top: 1rem; }
+    header .meta { font-size: 0.85rem; opacity: 0.75; margin-top: 1rem; }
     section {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -107,6 +107,7 @@
     }
     .badge-user { background: var(--user-soft); color: var(--user); }
     .badge-ops { background: var(--ops-soft); color: var(--ops); }
+    .badge-done { background: #dcfce7; color: #166534; }
     .phase { margin-top: 1rem; }
     .phase h3 { color: var(--accent); }
     .ui-mock { background: #f1f5f9; border: 1px dashed var(--border); border-radius: 8px; padding: 1rem; margin: 0.75rem 0; font-size: 0.9rem; }
@@ -123,10 +124,11 @@
     <div class="container">
       <h1>Plan: Gangsheet PDF Service</h1>
       <p class="overview">
-        Dịch vụ in DTF: <strong>User</strong> chỉ upload ảnh → nest gang-sheet → save/submit đơn.
-        <strong>Đội nội bộ</strong> (edit, ops, in, vận chuyển) xử lý toàn bộ pipeline sau submit — user không thấy sửa file, render PDF hay in ấn.
+        Dịch vụ in DTF kiểu <strong>Ninja Transfers</strong>: User upload ảnh → nest trên canvas 22" →
+        <strong>Save draft</strong> hoặc <strong>Save &amp; Add to Cart</strong> → checkout.
+        Ảnh lưu trên S3 (URL trong snapshot). <strong>Không</strong> có flow đội edit ghi đè file trên server.
       </p>
-      <p class="meta">Greenfield · User app + Ops pipeline · PNG / WEBP / AVIF · ảnh 20–100 MB</p>
+      <p class="meta">Spring Boot 3 · H2 (dev) → PostgreSQL · Gang sheet draft/confirmed · Cart · Order</p>
     </div>
   </header>
 
@@ -135,12 +137,13 @@
     <section id="todos">
       <h2>Checklist triển khai</h2>
       <ul class="todos">
-        <li><input type="checkbox" id="t1" /><label for="t1"><span class="badge badge-user">User FE</span> Upload batch → nest → Save/Submit đơn; trạng thái đơn đơn giản</label></li>
-        <li><input type="checkbox" id="t2" /><label for="t2"><span class="badge badge-ops">Ops</span> Backoffice: queue đơn SUBMITTED, refresh ảnh sau edit, render PDF</label></li>
-        <li><input type="checkbox" id="t3" /><label for="t3"><span class="badge">BE</span> API upload ảnh + lưu order/gang-sheet snapshot + render PDF (ops-only)</label></li>
-        <li><input type="checkbox" id="t4" /><label for="t4"><span class="badge badge-ops">SOP</span> Edit team: tải/sửa/upload đè file trên server — không API</label></li>
-        <li><input type="checkbox" id="t5" /><label for="t5"><span class="badge">BE</span> PNG/WEBP/AVIF decode, limits ảnh lớn, DPI warnings (nội bộ)</label></li>
-        <li><input type="checkbox" id="t6" /><label for="t6"><span class="badge">Phase 2</span> Auth, job queue render, in + shipping status hooks</label></li>
+        <li><input type="checkbox" checked disabled id="t1" /><label for="t1"><span class="badge badge-done">Done</span> Gang sheet API: save draft upsert + save &amp; add to cart</label></li>
+        <li><input type="checkbox" checked disabled id="t2" /><label for="t2"><span class="badge badge-done">Done</span> H2 + JPA: gang_sheets, cart_lines, orders</label></li>
+        <li><input type="checkbox" checked disabled id="t3" /><label for="t3"><span class="badge badge-done">Done</span> Cart API + checkout order (confirmed gang sheet)</label></li>
+        <li><input type="checkbox" checked disabled id="t4" /><label for="t4"><span class="badge badge-done">Done</span> Nest API + PDF render (ops/dev)</label></li>
+        <li><input type="checkbox" id="t5" /><label for="t5"><span class="badge badge-user">User FE</span> Builder UI: upload → nest → Save / Save &amp; Add to Cart</label></li>
+        <li><input type="checkbox" id="t6" /><label for="t6"><span class="badge badge-ops">Ops</span> Render PDF từ order snapshot sau checkout</label></li>
+        <li><input type="checkbox" id="t7" /><label for="t7"><span class="badge">Phase 2</span> Auth, pricing, PostgreSQL production</label></li>
       </ul>
     </section>
 
@@ -149,436 +152,282 @@
 
       <div class="lane-user">
         <strong>User (khách hàng)</strong>
-        <p>Upload ảnh → Build gang-sheet → <strong>Save / Submit đơn</strong> → theo dõi trạng thái: Đã gửi → Đang xử lý → Đang in → Đã giao.</p>
-        <p><em>Không thấy:</em> edit file, replace ảnh, render PDF, cảnh báo DPI kỹ thuật.</p>
+        <p>Upload ảnh (S3) → Build / nest gang-sheet trên canvas → <strong>Save</strong> hoặc <strong>Save &amp; Add to Cart</strong> → checkout.</p>
+        <p>Có thể tiếp tục sửa design khi <code>status = draft</code> (kể cả đã có trong cart). Chỉ khóa khi checkout.</p>
+        <p><em>Không thấy:</em> render PDF, pipeline in ấn nội bộ.</p>
       </div>
 
       <div class="lane-ops">
-        <strong>Nội bộ (edit team + ops + in ấn)</strong>
-        <p>Nhận đơn SUBMITTED → edit team sửa file trên server → ops refresh &amp; render PDF → in DTF → vận chuyển.</p>
-        <p><em>Replace/refresh ảnh</em> và <em>Generate PDF</em> chỉ trên <strong>backoffice / ops tool</strong>.</p>
+        <strong>Nội bộ (ops + in ấn)</strong>
+        <p>Nhận đơn <code>SUBMITTED</code> → render PDF từ <strong>snapshot đã lưu</strong> (ảnh S3 URL) → in DTF → vận chuyển.</p>
+        <p><em>Không có</em> bước edit team sửa file trên server.</p>
       </div>
 
       <div class="mermaid">
 flowchart TB
-    subgraph USER [User — FE khách hàng]
-        U1[Upload batch ảnh]
-        U2[Nest gang-sheet]
-        U3[Save / Submit đơn]
-        U4[Theo dõi trạng thái đơn]
-        U1 --> U2 --> U3 --> U4
+    subgraph USER [User — FE builder]
+        U1[Upload ảnh → S3]
+        U2[Nest / chỉnh canvas 22in]
+        U3[Save draft HOẶC Save and Add to Cart]
+        U4[Checkout]
+        U5[Theo dõi đơn]
+        U1 --> U2 --> U3
+        U3 -->|tiếp tục sửa| U2
+        U3 --> U4 --> U5
     end
 
-    subgraph INTERNAL [Nội bộ — ẩn với user]
-        I1[Edit team sửa file server]
-        I2[Ops refresh metadata ảnh]
-        I3[BE render PDF]
-        I4[In DTF]
-        I5[Vận chuyển]
-        I1 --> I2 --> I3 --> I4 --> I5
+    subgraph INTERNAL [Nội bộ]
+        I1[Ops nhận order SUBMITTED]
+        I2[Render PDF từ snapshot]
+        I3[In DTF]
+        I4[Ship]
+        I1 --> I2 --> I3 --> I4
     end
 
-    U3 -.->|đơn SUBMITTED| I1
-    I5 -.->|SHIPPED| U4
-      </div>
-    </section>
-
-    <section id="context">
-      <h2>Bối cảnh &amp; vai trò</h2>
-      <p>In DTF trên film rộng <strong>22 inch</strong>. File thiết kế thường <strong>20–100 MB</strong>. User thiết kế layout; xưởng đảm nhận sửa ảnh, xuất PDF, in và giao hàng.</p>
-
-      <table>
-        <thead><tr><th>Actor</th><th>Trách nhiệm</th><th>Touch hệ thống</th></tr></thead>
-        <tbody>
-          <tr><td><strong>User</strong></td><td>Upload ảnh, nest, submit đơn</td><td>User FE + BE (upload, submit order)</td></tr>
-          <tr><td><strong>User FE</strong></td><td>UI upload, canvas nesting, lưu/submit gang-sheet snapshot</td><td>API user-facing</td></tr>
-          <tr><td><strong>Edit team</strong></td><td>Tải file server → sửa → upload đè cùng path</td><td><strong>Không API</strong> — SFTP/shared folder</td></tr>
-          <tr><td><strong>Ops / dev</strong></td><td>Queue đơn, refresh ảnh, render PDF, đánh dấu in/xong</td><td>Backoffice FE + BE</td></tr>
-          <tr><td><strong>Gangsheet BE</strong></td><td>Lưu ảnh, order, snapshot layout, render PDF</td><td>REST API</td></tr>
-          <tr><td><strong>In &amp; logistics</strong></td><td>In film từ PDF, đóng gói, ship</td><td>Ngoài scope BE (hoặc webhook cập nhật status)</td></tr>
-        </tbody>
-      </table>
-
-      <div class="scope-in">
-        <strong>Trong phạm vi BE</strong>
-        <ul>
-          <li>Upload ảnh (user FE)</li>
-          <li>Lưu <strong>Order</strong> + <strong>gang-sheet snapshot</strong> khi user submit</li>
-          <li>Render PDF (gọi từ ops/backoffice hoặc job)</li>
-          <li>Đọc file ảnh mới nhất từ disk sau khi edit team ghi đè</li>
-          <li>Cập nhật trạng thái đơn (API ops)</li>
-        </ul>
-      </div>
-      <div class="scope-out">
-        <strong>Ngoài phạm vi BE</strong>
-        <ul>
-          <li>UI nesting user, backoffice ops (FE riêng hoặc module riêng)</li>
-          <li>Bin-packing algorithm (FE user)</li>
-          <li>Edit team workflow (file server + SOP)</li>
-          <li>In máy vật lý, courier — chỉ nhận status callback nếu tích hợp sau</li>
-        </ul>
+    U4 -.->|POST /api/orders| I1
+    I4 -.->|SHIPPED| U5
       </div>
     </section>
 
     <section id="user-flow">
-      <h2>Luồng User (FE khách hàng)</h2>
+      <h2>Luồng User (Ninja-style)</h2>
 
       <div class="mermaid">
 sequenceDiagram
     participant U as User
-    participant FE as User FE
+    participant FE as Builder FE
     participant BE as Backend
+    participant S3 as S3
 
-    U->>FE: Chọn nhiều ảnh
-    FE->>BE: POST /api/images
-    BE-->>FE: imageId
+    U->>FE: Upload ảnh
+    FE->>S3: Upload file
+    S3-->>FE: img URL
 
-    U->>FE: Nest trên canvas 22in
-    U->>FE: Save / Submit đơn
-    FE->>BE: POST /api/orders (gang-sheet snapshot)
-    BE-->>FE: orderId, status SUBMITTED
-    FE-->>U: Đơn đã gửi — đang xử lý
+    U->>FE: Auto-nest / kéo thả trên canvas
+    Note over FE: sheet.width = 22in, sheet.height từ nest
 
-    Note over U,BE: User không tham gia các bước sau
+    alt Save only
+        U->>FE: Bấm Save
+        FE->>BE: POST /api/gang-sheets
+        Note over FE,BE: design_id optional — upsert
+    else Save and Add to Cart
+        U->>FE: Bấm Save and Add to Cart
+        FE->>BE: POST /api/gang-sheets/cart
+        Note over FE,BE: quantity optional — default 1; đổi qty trong cart
+    end
+    BE-->>FE: design_id, sheet, status draft
 
-    U->>FE: Xem My Orders
-    FE->>BE: GET /api/orders/{id}
-    BE-->>FE: IN_PRODUCTION / PRINTED / SHIPPED
+    U->>FE: Checkout
+    FE->>BE: POST /api/orders
+    BE-->>FE: order submitted, gang sheets confirmed
       </div>
 
-      <h3>3 bước user thấy</h3>
+      <h3>Các bước trên builder</h3>
       <table>
-        <thead><tr><th>Bước</th><th>Màn hình (gợi ý UI)</th><th>Hành động</th></tr></thead>
+        <thead><tr><th>Bước</th><th>UI (Ninja)</th><th>API</th></tr></thead>
         <tbody>
           <tr>
             <td><strong>1. Upload</strong></td>
-            <td>
-              <div class="ui-mock">
-                <strong>Upload Designs</strong>
-                Drag-drop nhiều file · hiện thumbnail + dung lượng · nút "Tiếp tục"
-              </div>
-            </td>
-            <td>Chọn batch PNG/WEBP/AVIF → FE upload BE → nhận imageId</td>
+            <td>Drag-drop ảnh · gallery bên trái</td>
+            <td>FE → S3 (URL dùng trong <code>items[].img</code>)</td>
           </tr>
           <tr>
-            <td><strong>2. Nest</strong></td>
-            <td>
-              <div class="ui-mock">
-                <strong>Nest Gang Sheet</strong>
-                Canvas 22" · auto-nest · chỉnh x,y,size,rotation · preview film
-              </div>
-            </td>
-            <td>Xếp ảnh tiết kiệm film; chưa in</td>
+            <td><strong>2. Build</strong></td>
+            <td>Canvas 22" · auto-nest · margin · kéo/xoay</td>
+            <td><code>GET /api/gang-sheets/config</code> · optional <code>POST /api/nesting</code></td>
           </tr>
           <tr>
-            <td><strong>3. Save / Submit</strong></td>
-            <td>
-              <div class="ui-mock">
-                <strong>Submit Order</strong>
-                Tóm tắt số ảnh · kích thước sheet · nút "Gửi đơn in" · không có "Generate PDF"
-              </div>
-            </td>
-            <td>Lưu snapshot layout + chuyển order <code>SUBMITTED</code>; gang-sheet <strong>locked</strong></td>
+            <td><strong>3a. Save</strong></td>
+            <td>Nút <strong>Save</strong> — lưu để dùng sau</td>
+            <td><code>POST /api/gang-sheets</code></td>
+          </tr>
+          <tr>
+            <td><strong>3b. Save &amp; Add to Cart</strong></td>
+            <td>Nút <strong>Save &amp; Add to Cart</strong> (qty mặc định 1)</td>
+            <td><code>POST /api/gang-sheets/cart</code> · đổi qty: <code>PATCH /api/cart/items</code></td>
+          </tr>
+          <tr>
+            <td><strong>4. Checkout</strong></td>
+            <td>Thanh toán / đặt hàng</td>
+            <td><code>POST /api/orders</code></td>
           </tr>
         </tbody>
       </table>
 
-      <h3>Trạng thái đơn — user nhìn thấy</h3>
+      <h3>Trạng thái gang sheet</h3>
       <table>
-        <thead><tr><th>Status (user-facing)</th><th>Ý nghĩa</th></tr></thead>
+        <thead><tr><th>Status</th><th>Ý nghĩa</th><th>Sửa được?</th><th>Trong cart?</th></tr></thead>
         <tbody>
-          <tr><td><code>SUBMITTED</code></td><td>Đã gửi — chờ xưởng xử lý</td></tr>
-          <tr><td><code>IN_PRODUCTION</code></td><td>Đang sửa ảnh / chuẩn bị in</td></tr>
-          <tr><td><code>PRINTED</code></td><td>Đã in xong, chờ giao</td></tr>
-          <tr><td><code>SHIPPED</code></td><td>Đã vận chuyển</td></tr>
-          <tr><td><code>CANCELLED</code></td><td>Đã hủy (nếu áp dụng)</td></tr>
+          <tr><td><code>draft</code></td><td>Đang thiết kế / đã add cart</td><td>✅</td><td>Có thể</td></tr>
+          <tr><td><code>confirmed</code></td><td>Đã checkout — snapshot đóng băng</td><td>❌</td><td>—</td></tr>
         </tbody>
       </table>
-      <p>User <strong>không</strong> thấy: <code>AWAITING_EDIT</code>, <code>READY_FOR_PRINT</code>, <code>PDF_GENERATED</code> — đó là trạng thái nội bộ ops.</p>
+
+      <h3>Trạng thái đơn (order)</h3>
+      <table>
+        <thead><tr><th>Status</th><th>Ý nghĩa user-facing</th></tr></thead>
+        <tbody>
+          <tr><td><code>submitted</code></td><td>Đã đặt hàng</td></tr>
+          <tr><td><code>in_production</code></td><td>Đang xử lý / in</td></tr>
+          <tr><td><code>printed</code></td><td>Đã in</td></tr>
+          <tr><td><code>shipped</code></td><td>Đã giao</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="api">
+      <h2>API contract (đã implement)</h2>
+
+      <h3>Gang sheet — builder</h3>
+      <table>
+        <thead><tr><th>Method</th><th>Path</th><th>Mô tả</th></tr></thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/api/gang-sheets/config</code></td><td>sheet_width_inch, padding — FE init canvas</td></tr>
+          <tr><td>POST</td><td><code>/api/gang-sheets</code></td><td><strong>Save draft</strong> — upsert (<code>design_id</code> optional)</td></tr>
+          <tr><td>POST</td><td><code>/api/gang-sheets/cart</code></td><td><strong>Save &amp; Add to Cart</strong> — upsert + cart (<code>quantity</code> optional, default 1)</td></tr>
+          <tr><td>GET</td><td><code>/api/gang-sheets/{id}</code></td><td>Load design (sheet + items + in_cart)</td></tr>
+          <tr><td>GET</td><td><code>/api/gang-sheets</code></td><td>Danh sách designs</td></tr>
+          <tr><td>POST</td><td><code>/api/gang-sheets/pdf</code></td><td>Render PDF (dev/ops) — validate + print layout + QR</td></tr>
+          <tr><td>POST</td><td><code>/api/nesting</code></td><td>Auto-nest (optional — FE có thể nest client-side)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Save draft — request / response</h3>
+      <pre><code>POST /api/gang-sheets
+{
+  "design_id": null,
+  "name": "My Gang Sheet",
+  "sheet": { "width_inch": 22, "height_inch": 36.5, "unit": "INCH" },
+  "items": [
+    { "img": "https://s3.../a.png", "x": 0.5, "y": 1, "width": 5, "height": 5,
+      "rotation": 0, "flip_h": false, "flip_v": false, "dpi": 300 }
+  ]
+}
+
+→ MGS_30
+{
+  "data": {
+    "design_id": "uuid",
+    "status": "draft",
+    "sheet": { "width_inch": 22, "height_inch": 36.5, "unit": "INCH" },
+    "item_count": 1,
+    "created_at": "...",
+    "updated_at": "..."
+  }
+}</code></pre>
+      <p>Lần save sau: gửi cùng <code>design_id</code> → update draft. BE lưu <code>sheet</code> từ FE (width luôn = config 22").</p>
+
+      <h3>Save &amp; Add to Cart</h3>
+      <pre><code>POST /api/gang-sheets/cart
+{
+  "design_id": "uuid",
+  "name": "...",
+  "sheet": { ... },
+  "items": [ ... ]
+}
+
+→ MGS_42 — in_cart: true, cart_quantity: 1 (mặc định)</code></pre>
+      <p><code>quantity</code> <strong>optional</strong> — FE thường không gửi. Lần đầu add = 1 tấm. Re-save từ cart edit (không gửi quantity) giữ qty hiện tại. Đổi số lượng: <code>PATCH /api/cart/items/{line_id}</code>.</p>
+
+      <h3>Cart &amp; Order</h3>
+      <table>
+        <thead><tr><th>Method</th><th>Path</th><th>Mô tả</th></tr></thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/api/cart</code></td><td>Xem giỏ</td></tr>
+          <tr><td>POST</td><td><code>/api/cart/items</code></td><td>Add design + qty (cộng dồn)</td></tr>
+          <tr><td>PATCH</td><td><code>/api/cart/items/{line_id}</code></td><td>Đổi quantity</td></tr>
+          <tr><td>DELETE</td><td><code>/api/cart/items/{line_id}</code></td><td>Xóa dòng</td></tr>
+          <tr><td>POST</td><td><code>/api/orders</code></td><td>Checkout — snapshot cart → order, gang sheet → <code>confirmed</code>, clear cart</td></tr>
+          <tr><td>GET</td><td><code>/api/orders</code>, <code>/api/orders/{id}</code></td><td>My orders</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="data-model">
+      <h2>Mô hình dữ liệu (H2)</h2>
+
+      <h3>gang_sheets</h3>
+      <pre><code>SavedGangSheet
+  id (design_id)
+  name
+  status: draft | confirmed
+  snapshot: {
+    sheet: { widthInch, heightInch, unit }
+    items: [{ img, x, y, width, height, rotation, flipH, flipV, crop, dpi }]
+  }
+  createdAt, updatedAt, confirmedAt</code></pre>
+
+      <h3>cart_lines</h3>
+      <pre><code>CartLine
+  lineId
+  designId  → gang_sheets.id
+  quantity  → số tấm in</code></pre>
+
+      <h3>orders + order_lines</h3>
+      <pre><code>Order
+  id, status: submitted | in_production | printed | shipped
+  lines: [{ designId, designName, quantity, snapshot }]</code></pre>
+    </section>
+
+    <section id="layout">
+      <h2>Layout: Builder vs Print</h2>
+      <table>
+        <thead><tr><th>Giai đoạn</th><th>Ai tính sheet height</th><th>QR padding</th></tr></thead>
+        <tbody>
+          <tr><td>Save draft (builder)</td><td>FE gửi <code>sheet.height_inch</code> sau nest</td><td>Không</td></tr>
+          <tr><td>Gen PDF (print)</td><td>BE <code>computePrintLayout</code></td><td>Có — có thể cao hơn builder</td></tr>
+        </tbody>
+      </table>
+      <p>User canvas khớp builder height. File in có thể dài hơn để chừa QR — items không đổi vị trí.</p>
     </section>
 
     <section id="ops-flow">
-      <h2>Luồng nội bộ (Ops pipeline)</h2>
+      <h2>Luồng nội bộ (sau checkout)</h2>
 
       <div class="mermaid">
 sequenceDiagram
-    participant OB as Ops Backoffice
+    participant OB as Ops
     participant BE as Backend
-    participant FS as Server files
-    participant ET as Edit team
-    participant Print as In ấn
+    participant S3 as S3 URLs
 
-    Note over OB: Đơn mới SUBMITTED
-    OB->>BE: GET /api/ops/orders?status=SUBMITTED
-    OB->>ET: Giao danh sách storagePath cần sửa
+    Note over OB: Order SUBMITTED
+    OB->>BE: GET /api/orders/{id}
+    BE-->>OB: order lines + snapshot per design
 
-    ET->>FS: Download → edit → upload đè
-    ET->>OB: Báo edit xong (chat/ticket/nút ops)
+    OB->>BE: Render PDF (từ snapshot)
+    BE->>S3: Fetch ảnh theo items[].img
+    BE->>BE: computePrintLayout + PDFBox
+    BE-->>OB: pdfId, warnings
 
-    OB->>BE: POST /api/ops/orders/{id}/refresh-images
-    BE->>FS: Đọc metadata mới từng imageId
-    BE-->>OB: OK + DPI warnings (nội bộ)
-
-    OB->>BE: POST /api/ops/orders/{id}/render-pdf
-    BE->>FS: Đọc file đã sửa
-    BE->>BE: Validate snapshot + render PDF
-    BE-->>OB: pdfId, downloadUrl, warnings
-
-  OB->>BE: PATCH status IN_PRODUCTION / PRINTED
-    OB->>Print: Gửi PDF in
-    Print->>OB: In xong
-    OB->>BE: PATCH status SHIPPED
+    OB->>OB: In DTF → PATCH status shipped
       </div>
 
-      <h3>Chi tiết từng bước nội bộ</h3>
-      <table>
-        <thead><tr><th>#</th><th>Bước</th><th>Ai</th><th>Mô tả</th></tr></thead>
-        <tbody>
-          <tr><td>1</td><td>Nhận đơn</td><td>Ops</td><td>Queue đơn <code>SUBMITTED</code>; xem gang-sheet snapshot + danh sách file</td></tr>
-          <tr><td>2</td><td>Edit ảnh</td><td>Edit team</td><td>SFTP: tải → sửa → upload <strong>đè cùng path/tên</strong>. Không API.</td></tr>
-          <tr><td>3</td><td>Refresh</td><td>Ops + BE</td><td>Xác nhận file đã cập nhật; đọc lại width/height; cảnh báo DPI — <strong>chỉ backoffice</strong></td></tr>
-          <tr><td>4</td><td>Render PDF</td><td>Ops + BE</td><td>Dùng <strong>snapshot layout</strong> đã lưu lúc submit + file ảnh mới → PDF</td></tr>
-          <tr><td>5</td><td>In</td><td>Xưởng in</td><td>Tải PDF, in DTF</td></tr>
-          <tr><td>6</td><td>Ship</td><td>Logistics</td><td>Cập nhật <code>SHIPPED</code> — user thấy trên My Orders</td></tr>
-        </tbody>
-      </table>
-
-      <h3>Replace ảnh — ai đảm nhận?</h3>
-      <table>
-        <thead><tr><th>Việc</th><th>Đảm nhận</th></tr></thead>
-        <tbody>
-          <tr><td>Ghi đè file vật lý trên server</td><td><strong>Edit team</strong> (không API)</td></tr>
-          <tr><td>Refresh metadata / xác nhận ảnh mới</td><td><strong>Ops backoffice</strong> gọi BE</td></tr>
-          <tr><td>Giữ layout (x,y,w,h,rotation)</td><td><strong>Snapshot</strong> lúc user submit — không đổi</td></tr>
-          <tr><td>UI "Apply edited images"</td><td><strong>Chỉ ops</strong> — user không có màn này</td></tr>
-        </tbody>
-      </table>
-
-      <h3>Màn ops backoffice (gợi ý UI)</h3>
-      <div class="ui-mock">
-        <strong>Order #12345 — SUBMITTED</strong>
-        Gang-sheet preview · danh sách imageId + storagePath · nút "Export paths cho edit team" ·
-        sau edit: "Refresh images" · "Generate PDF" · link tải PDF · đổi status
-      </div>
+      <p><strong>Đã bỏ:</strong> edit team download/sửa/upload đè file · refresh-images · replace API.</p>
     </section>
 
     <section id="business-flow">
-      <h2>Luồng end-to-end (tóm tắt)</h2>
+      <h2>Luồng end-to-end</h2>
       <div class="mermaid">
 flowchart LR
-    A[User upload] --> B[Nest]
-    B --> C[Submit order]
-    C --> D[Edit team sửa file]
-    D --> E[Ops refresh]
-    E --> F[Render PDF]
-    F --> G[In]
-    G --> H[Ship]
+    A[Upload S3] --> B[Nest canvas]
+    B --> C{Save?}
+    C -->|Save| D[Draft DB]
+    C -->|Save + Cart| E[Draft + Cart]
+    D --> F[Checkout]
+    E --> F
+    F --> G[Order + confirmed]
+    G --> H[Ops render PDF]
+    H --> I[In + Ship]
 
     style A fill:#d1fae5
     style B fill:#d1fae5
     style C fill:#d1fae5
-    style D fill:#fef3c7
-    style E fill:#fef3c7
-    style F fill:#fef3c7
+    style D fill:#d1fae5
+    style E fill:#d1fae5
+    style F fill:#d1fae5
     style G fill:#fef3c7
     style H fill:#fef3c7
-      </div>
-      <p><span style="color:#059669">■</span> User thấy &nbsp; <span style="color:#d97706">■</span> Nội bộ xử lý</p>
-
-      <h3>Xử lý ảnh lớn (20–100 MB)</h3>
-      <table>
-        <thead><tr><th>Tầng</th><th>Cơ chế</th></tr></thead>
-        <tbody>
-          <tr><td>Upload</td><td><code>maxBytesPerImage</code> 100–200 MB; validate metadata sớm</td></tr>
-          <tr><td>Submit budget</td><td><code>maxTotalBytesPerOrder</code> 2–5 GB unique images</td></tr>
-          <tr><td>Render</td><td>Subsampling PNG/WEBP; ffmpeg scale AVIF; cap ~40M decode pixels</td></tr>
-          <tr><td>DPI warnings</td><td>Chỉ hiển thị ops — không show user trừ khi product yêu cầu</td></tr>
-        </tbody>
-      </table>
-
-      <h3>Định dạng ảnh</h3>
-      <p>Hỗ trợ: <strong>PNG, WEBP, AVIF</strong>. Không hỗ trợ JPEG (alpha / chất lượng in).</p>
-    </section>
-
-    <section id="architecture">
-      <h2>Kiến trúc đề xuất</h2>
-      <table>
-        <thead><tr><th>Module</th><th>Trách nhiệm</th><th>Client</th></tr></thead>
-        <tbody>
-          <tr><td><strong>Image API</strong></td><td>Upload, metadata</td><td>User FE</td></tr>
-          <tr><td><strong>Order API</strong></td><td>Submit đơn, lưu snapshot, status user-facing</td><td>User FE</td></tr>
-          <tr><td><strong>Ops API</strong></td><td>Queue đơn, refresh images, render PDF, cập nhật status nội bộ</td><td>Backoffice</td></tr>
-          <tr><td><strong>Layout Validator</strong></td><td>Validate snapshot lúc submit &amp; trước render</td><td>BE internal</td></tr>
-          <tr><td><strong>PDF Renderer</strong></td><td>Decode + PDFBox embed</td><td>BE internal</td></tr>
-        </tbody>
-      </table>
-      <div class="mermaid">
-flowchart TB
-    subgraph clients [Clients]
-        UF[User FE]
-        OF[Ops Backoffice]
-    end
-    subgraph be [Gangsheet BE]
-        IA[Image API]
-        OA[Order API]
-        OPS[Ops API]
-        PDF[PDF Renderer]
-    end
-    DB[(PostgreSQL)]
-    FS[File Storage]
-
-    UF --> IA
-    UF --> OA
-    OF --> OPS
-    OPS --> PDF
-    OA --> DB
-    IA --> FS
-    PDF --> FS
-      </div>
-    </section>
-
-    <section id="data-model">
-      <h2>Mô hình dữ liệu</h2>
-
-      <h3>ImageAsset</h3>
-      <pre><code>ImageAsset
-  id: UUID
-  orderId?: UUID
-  storagePath: string       // cố định — edit team ghi đè tại đây
-  originalFilename: string
-  contentType, sizeBytes, widthPx, heightPx
-  createdAt, updatedAt</code></pre>
-
-      <h3>Order (khi user Submit)</h3>
-      <pre><code>Order
-  id: UUID
-  userId: UUID
-  status: SUBMITTED | IN_PRODUCTION | PRINTED | SHIPPED | CANCELLED
-  gangSheetSnapshot: {       // frozen lúc submit
-    sheet: { widthInch, heightInch, unit: "INCH" }
-    items: [{ imageId, x, y, width, height, rotation }]
-  }
-  pdfId?: UUID
-  submittedAt, updatedAt</code></pre>
-
-      <h3>Trạng thái nội bộ (ops only, optional)</h3>
-      <pre><code>OpsState (không expose user)
-  orderId
-  editStatus: PENDING | IN_PROGRESS | DONE
-  imagesRefreshedAt?: timestamp
-  pdfGeneratedAt?: timestamp
-  renderWarnings?: string[]</code></pre>
-    </section>
-
-    <section id="api">
-      <h2>API contract</h2>
-
-      <h3>User-facing</h3>
-      <table>
-        <thead><tr><th>Method</th><th>Path</th><th>Mô tả</th></tr></thead>
-        <tbody>
-          <tr><td>POST</td><td><code>/api/images</code></td><td>Upload ảnh (multipart)</td></tr>
-          <tr><td>GET</td><td><code>/api/images/{id}</code></td><td>Metadata (preview user)</td></tr>
-          <tr><td>POST</td><td><code>/api/orders</code></td><td>Submit đơn + gang-sheet snapshot → <code>SUBMITTED</code></td></tr>
-          <tr><td>GET</td><td><code>/api/orders/{id}</code></td><td>Chi tiết đơn + status (không PDF ops)</td></tr>
-          <tr><td>GET</td><td><code>/api/orders</code></td><td>My orders</td></tr>
-        </tbody>
-      </table>
-      <p>User <strong>không</strong> gọi <code>POST /api/gang-sheets/pdf</code> trực tiếp.</p>
-
-      <h3>Ops / backoffice</h3>
-      <table>
-        <thead><tr><th>Method</th><th>Path</th><th>Mô tả</th></tr></thead>
-        <tbody>
-          <tr><td>GET</td><td><code>/api/ops/orders</code></td><td>Queue đơn (filter status)</td></tr>
-          <tr><td>GET</td><td><code>/api/ops/orders/{id}</code></td><td>Snapshot + paths + ops state</td></tr>
-          <tr><td>POST</td><td><code>/api/ops/orders/{id}/refresh-images</code></td><td>Re-read metadata sau edit</td></tr>
-          <tr><td>POST</td><td><code>/api/ops/orders/{id}/render-pdf</code></td><td>Render từ snapshot + file mới</td></tr>
-          <tr><td>GET</td><td><code>/api/gang-sheets/{pdfId}/download</code></td><td>Tải PDF (ops / in)</td></tr>
-          <tr><td>PATCH</td><td><code>/api/ops/orders/{id}/status</code></td><td>IN_PRODUCTION → PRINTED → SHIPPED</td></tr>
-        </tbody>
-      </table>
-
-      <h3>Submit order — request mẫu</h3>
-      <pre><code>POST /api/orders
-{
-  "gangSheet": {
-    "sheet": { "widthInch": 22, "heightInch": 48.5, "unit": "INCH" },
-    "items": [
-      { "imageId": "...", "x": 0, "y": 0, "width": 3, "height": 4, "rotation": 0 }
-    ]
-  }
-}</code></pre>
-
-      <h3>Không có</h3>
-      <ul>
-        <li><code>POST /api/images/{id}/replace</code> — edit team ghi file trực tiếp</li>
-        <li>API replace gang-sheet cho user — layout frozen tại submit</li>
-      </ul>
-    </section>
-
-    <section id="render-flow">
-      <h2>Render PDF (ops-triggered)</h2>
-      <div class="mermaid">
-flowchart TD
-    A[Ops: render-pdf] --> B[Load Order snapshot]
-    B --> C[Validate layout]
-    C --> D[Resolve imageId → storagePath]
-    D --> E[Read file mới nhất từ disk]
-    E --> F[Decode subsampled / AVIF ffmpeg]
-    F --> G[PDFBox embed + rotation]
-    G --> H[Save PDF + link order.pdfId]
-    H --> I[Return warnings cho ops]
-      </div>
-      <ul>
-        <li>Layout lấy từ <code>gangSheetSnapshot</code> — không từ request tùy ý</li>
-        <li>Ảnh lấy từ disk tại thời điểm render (sau edit)</li>
-        <li>DPI warnings trả ops; có thể log, không bắt buộc hiện user</li>
-      </ul>
-    </section>
-
-    <section id="storage">
-      <h2>Storage</h2>
-      <pre><code>data/
-  images/{imageId}/design.{ext}    # edit team ghi đè
-  output/gang-sheet-{pdfId}.pdf
-  tmp/</code></pre>
-      <table>
-        <thead><tr><th>Config</th><th>Gợi ý</th></tr></thead>
-        <tbody>
-          <tr><td>maxBytesPerImage</td><td>100–200 MB</td></tr>
-          <tr><td>maxTotalBytesPerOrder</td><td>2–5 GB</td></tr>
-          <tr><td>sheetWidthInch</td><td>22</td></tr>
-          <tr><td>renderDpi</td><td>300</td></tr>
-        </tbody>
-      </table>
-    </section>
-
-    <section id="phases">
-      <h2>Triển khai theo phase</h2>
-      <div class="phase">
-        <h3>Phase 1 — MVP</h3>
-        <ul>
-          <li>User FE: upload → nest → submit order</li>
-          <li>BE: images + orders + snapshot + ops render PDF</li>
-          <li>Ops backoffice tối thiểu: list đơn, render PDF, đổi status</li>
-          <li>SOP edit team (file server)</li>
-          <li>PNG / WEBP / AVIF, ảnh lớn</li>
-        </ul>
-      </div>
-      <div class="phase">
-        <h3>Phase 2</h3>
-        <ul>
-          <li>Auth user vs ops roles</li>
-          <li>Job queue auto-render sau khi ops mark edit done</li>
-          <li>Webhook / manual SHIPPED</li>
-        </ul>
-      </div>
-      <div class="phase">
-        <h3>Phase 3</h3>
-        <ul>
-          <li>S3 storage, async render, multi-tenant</li>
-        </ul>
+    style I fill:#fef3c7
       </div>
     </section>
 
@@ -587,11 +436,12 @@ flowchart TD
       <table>
         <thead><tr><th>Nguyên tắc</th><th>Chi tiết</th></tr></thead>
         <tbody>
-          <tr><td>User journey ngắn</td><td>Upload → Nest → Submit — xong phần việc của user</td></tr>
-          <tr><td>Ẩn complexity</td><td>Edit, refresh, PDF, in — pipeline nội bộ</td></tr>
-          <tr><td>Snapshot tại submit</td><td>Layout không đổi; chỉ nội dung file ảnh thay sau edit</td></tr>
-          <tr><td>Edit team không API</td><td>File overwrite tại storagePath cố định</td></tr>
-          <tr><td>Một đơn = một gang-sheet</td><td>Order gắn snapshot; ops xử lý tuần tự hoặc queue</td></tr>
+          <tr><td>Một nút Save = một API</td><td><code>POST /api/gang-sheets</code> upsert qua <code>design_id</code></td></tr>
+          <tr><td>Save &amp; Add to Cart</td><td><code>POST /api/gang-sheets/cart</code> — lưu + cart trong 1 request</td></tr>
+          <tr><td>Draft trong cart OK</td><td>Chỉ <code>confirmed</code> khi checkout</td></tr>
+          <tr><td>Ảnh trên S3</td><td><code>items[].img</code> URL — không sửa file server-side</td></tr>
+          <tr><td>Snapshot tại checkout</td><td>Order line copy snapshot — layout frozen</td></tr>
+          <tr><td>Không edit team</td><td>Bỏ flow ghi đè file / refresh metadata sau edit</td></tr>
         </tbody>
       </table>
     </section>
@@ -599,16 +449,17 @@ flowchart TD
     <section id="dod">
       <h2>Definition of Done (MVP)</h2>
       <ul>
-        <li>User submit đơn sau nest — không thấy bước edit/render</li>
-        <li>Edit team ghi đè file; ops render PDF từ snapshot + file mới</li>
-        <li>PDF đúng layout đã submit; ảnh 20 MB+ OK</li>
-        <li>User xem được status SUBMITTED → SHIPPED</li>
-        <li>SOP + README ops/edit team</li>
+        <li>✅ User save draft hoặc save &amp; add to cart sau khi build gang sheet</li>
+        <li>✅ Cart + checkout → order + gang sheet confirmed</li>
+        <li>✅ H2 persist designs, cart, orders</li>
+        <li>⬜ FE builder hoàn chỉnh (Ninja-style 2 nút Save)</li>
+        <li>⬜ Ops render PDF từ order snapshot sau checkout</li>
+        <li>⬜ User xem order status SUBMITTED → SHIPPED</li>
       </ul>
     </section>
 
     <footer>
-      Gangsheet PDF Service Plan · User: upload → nest → submit · Ops: edit → PDF → in → ship
+      Gangsheet PDF Service Plan · Upload → Nest → Save / Save &amp; Add to Cart → Checkout · Ops: PDF → in → ship
     </footer>
   </div>
 

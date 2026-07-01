@@ -9,6 +9,12 @@ import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
 
+/**
+ * Save draft and ensure a cart line exists.
+ * <p>{@code quantity} is optional — FE typically omits it (Ninja-style).
+ * First add defaults to 1; re-save from cart edit keeps existing cart qty.
+ * Change qty later via {@code PATCH /api/cart/items/{line_id}}.
+ */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record SaveAndAddToCartRequest(
         @JsonProperty("design_id")
@@ -16,6 +22,7 @@ public record SaveAndAddToCartRequest(
 
         String name,
 
+        /** Optional. Omitted → first add uses 1; re-save keeps cart qty. */
         @Min(value = 1, message = "quantity must be at least 1")
         Integer quantity,
 
@@ -26,10 +33,6 @@ public record SaveAndAddToCartRequest(
         @NotEmpty(message = "items must not be empty")
         List<@NotNull @Valid GangSheetItemRequest> items
 ) {
-
-    public int resolvedQuantity() {
-        return quantity == null ? 1 : quantity;
-    }
 
     public String resolvedDesignId() {
         return designId != null && !designId.isBlank() ? designId.trim() : null;

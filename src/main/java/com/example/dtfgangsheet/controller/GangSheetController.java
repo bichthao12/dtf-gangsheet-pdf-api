@@ -19,8 +19,6 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,7 +26,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -47,6 +44,9 @@ public class GangSheetController {
         this.gangSheetService = gangSheetService;
     }
 
+    /**
+     * Save draft only. Response has no {@code items}; use GET /api/gang-sheets/{id} to reload layout.
+     */
     @PostMapping
     public ApiResponse<SaveGangSheetResponse> saveDraft(
             @Valid @RequestBody SaveGangSheetRequest request
@@ -58,18 +58,18 @@ public class GangSheetController {
         );
     }
 
+    /**
+     * Save draft + cart. {@code quantity} optional (default 1); change qty via PATCH /api/cart/items.
+     */
     @PostMapping("/cart")
-    public ResponseEntity<ApiResponse<SaveAndAddToCartResponse>> saveAndAddToCart(
+    public ApiResponse<SaveAndAddToCartResponse> saveAndAddToCart(
             @Valid @RequestBody SaveAndAddToCartRequest request
     ) {
-        SaveAndAddToCartResponse data = gangSheetService.saveAndAddToCart(
-                request.resolvedDesignId(), request);
-        HttpStatus status = request.isCreate() ? HttpStatus.CREATED : HttpStatus.OK;
-        return ResponseEntity.status(status).body(ApiResponse.success(
+        return ApiResponse.success(
                 ApiResultCode.GANG_SHEET_SAVED_TO_CART.getCode(),
                 ApiResultCode.GANG_SHEET_SAVED_TO_CART.getMessage(),
-                data
-        ));
+                gangSheetService.saveAndAddToCart(request.resolvedDesignId(), request)
+        );
     }
 
     @GetMapping("/config")
@@ -104,7 +104,6 @@ public class GangSheetController {
     }
 
     @PostMapping("/pdf")
-    @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<GeneratePdfResponse> generatePdf(
             @Valid @RequestBody List<@NotNull @Valid GangSheetItemRequest> items
     ) {

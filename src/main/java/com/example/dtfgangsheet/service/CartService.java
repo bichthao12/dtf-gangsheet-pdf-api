@@ -1,36 +1,32 @@
 package com.example.dtfgangsheet.service;
 
+import com.example.dtfgangsheet.commerce.handler.CartLineHandler;
+import com.example.dtfgangsheet.commerce.handler.ProductLineHandlerRegistry;
 import com.example.dtfgangsheet.dto.request.AddCartItemRequest;
 import com.example.dtfgangsheet.dto.request.UpdateCartItemRequest;
 import com.example.dtfgangsheet.dto.response.CartLineResponse;
 import com.example.dtfgangsheet.dto.response.CartResponse;
-import com.example.dtfgangsheet.dto.common.ApiResultCode;
-import com.example.dtfgangsheet.exception.AppException;
 import com.example.dtfgangsheet.exception.CartLineNotFoundException;
-import com.example.dtfgangsheet.exception.GangSheetNotFoundException;
 import com.example.dtfgangsheet.mapper.CartMapper;
 import com.example.dtfgangsheet.model.Cart;
 import com.example.dtfgangsheet.model.CartLine;
-import com.example.dtfgangsheet.model.SavedGangSheet;
+import com.example.dtfgangsheet.model.ProductType;
 import com.example.dtfgangsheet.repository.CartRepository;
-import com.example.dtfgangsheet.repository.GangSheetRepository;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 
 @Service
 public class CartService {
 
     private final CartRepository cartRepository;
-    private final GangSheetRepository gangSheetRepository;
+    private final ProductLineHandlerRegistry handlerRegistry;
 
-    public CartService(CartRepository cartRepository, GangSheetRepository gangSheetRepository) {
+    public CartService(CartRepository cartRepository, ProductLineHandlerRegistry handlerRegistry) {
         this.cartRepository = cartRepository;
-        this.gangSheetRepository = gangSheetRepository;
+        this.handlerRegistry = handlerRegistry;
     }
 
     public CartResponse getCart() {
@@ -38,30 +34,29 @@ public class CartService {
     }
 
     public CartResponse addItem(AddCartItemRequest request) {
-        requireAddableDesign(request.designId());
+        ProductType productType = request.resolvedProductType();
+        CartLineHandler handler = handlerRegistry.cartHandler(productType);
+        handler.validateAdd(request);
+
         Cart cart = cartRepository.load();
         Instant now = Instant.now();
-
         List<CartLine> lines = new ArrayList<>(cart.lines());
-        int existingIndex = indexOfDesign(lines, request.designId());
+        String referenceId = request.resolvedReferenceId();
+        int existingIndex = indexOfReference(lines, productType, referenceId);
 
         if (existingIndex >= 0) {
             CartLine existing = lines.get(existingIndex);
             lines.set(existingIndex, new CartLine(
                     existing.lineId(),
-                    existing.designId(),
+                    productType,
+                    referenceId,
                     existing.quantity() + request.quantity(),
+                    existing.payload(),
                     existing.addedAt(),
                     now
             ));
         } else {
-            lines.add(new CartLine(
-                    UUID.randomUUID().toString(),
-                    request.designId(),
-                    request.quantity(),
-                    now,
-                    now
-            ));
+            lines.add(handler.newCartLine(request));
         }
 
         cartRepository.save(new Cart(lines, now));
@@ -69,33 +64,36 @@ public class CartService {
     }
 
     /**
-     * Ensures the design is in cart with the given quantity (set/replace, not merge).
+     * Resolves cart qty for {@link GangSheetService#saveAndAddToCart}.
+     * Explicit {@code requestedQuantity} wins; otherwise keep existing line qty or default 1.
      */
+    public int resolveEnsureQuantity(String designId, Integer requestedQuantity) {
+        if (requestedQuantity != null) {
+            return requestedQuantity;
+        }
+        int existing = quantityForDesign(designId);
+        return existing > 0 ? existing : 1;
+    }
+
+    /** Builder convenience: ensures gang sheet design is in cart with exact quantity. */
     public int ensureItem(String designId, int quantity) {
-        requireAddableDesign(designId);
+        return ensureItem(ProductType.DTF_GANG_SHEET_BUILDER, designId, quantity);
+    }
+
+    public int ensureItem(ProductType productType, String referenceId, int quantity) {
+        CartLineHandler handler = handlerRegistry.cartHandler(productType);
         Cart cart = cartRepository.load();
         Instant now = Instant.now();
 
         List<CartLine> lines = new ArrayList<>(cart.lines());
-        int existingIndex = indexOfDesign(lines, designId);
+        int existingIndex = indexOfReference(lines, productType, referenceId);
+        CartLine existing = existingIndex >= 0 ? lines.get(existingIndex) : null;
+        CartLine updated = handler.ensureLine(existing, referenceId, quantity);
 
         if (existingIndex >= 0) {
-            CartLine existing = lines.get(existingIndex);
-            lines.set(existingIndex, new CartLine(
-                    existing.lineId(),
-                    existing.designId(),
-                    quantity,
-                    existing.addedAt(),
-                    now
-            ));
+            lines.set(existingIndex, updated);
         } else {
-            lines.add(new CartLine(
-                    UUID.randomUUID().toString(),
-                    designId,
-                    quantity,
-                    now,
-                    now
-            ));
+            lines.add(updated);
         }
 
         cartRepository.save(new Cart(lines, now));
@@ -108,7 +106,14 @@ public class CartService {
 
         List<CartLine> lines = cart.lines().stream()
                 .map(line -> line.lineId().equals(lineId)
-                        ? new CartLine(line.lineId(), line.designId(), request.quantity(), line.addedAt(), now)
+                        ? new CartLine(
+                                line.lineId(),
+                                line.productType(),
+                                line.referenceId(),
+                                request.quantity(),
+                                line.payload(),
+                                line.addedAt(),
+                                now)
                         : line)
                 .toList();
 
@@ -140,7 +145,8 @@ public class CartService {
 
     public int quantityForDesign(String designId) {
         return cartRepository.load().lines().stream()
-                .filter(line -> line.designId().equals(designId))
+                .filter(line -> line.productType() == ProductType.DTF_GANG_SHEET_BUILDER)
+                .filter(line -> designId.equals(line.referenceId()))
                 .mapToInt(CartLine::quantity)
                 .sum();
     }
@@ -153,25 +159,11 @@ public class CartService {
         return cartRepository.load();
     }
 
-    private SavedGangSheet requireAddableDesign(String designId) {
-        SavedGangSheet gangSheet = gangSheetRepository.findById(designId)
-                .orElseThrow(() -> new GangSheetNotFoundException(designId));
-
-        if (!gangSheet.isEditable()) {
-            throw new AppException(
-                    ApiResultCode.GANG_SHEET_NOT_ADDABLE,
-                    HttpStatus.CONFLICT,
-                    "Confirmed gang sheet cannot be added to cart: " + designId
-            );
-        }
-        return gangSheet;
-    }
-
     private CartResponse toResponse(Cart cart) {
         List<CartLineResponse> lines = cart.lines().stream()
                 .map(line -> {
-                    SavedGangSheet gangSheet = gangSheetRepository.findById(line.designId()).orElse(null);
-                    return CartMapper.toLineResponse(line, gangSheet);
+                    String name = handlerRegistry.cartHandler(line.productType()).resolveDisplayName(line);
+                    return CartMapper.toLineResponse(line, name);
                 })
                 .toList();
 
@@ -179,9 +171,10 @@ public class CartService {
         return new CartResponse(lines, totalItems, cart.updatedAt());
     }
 
-    private int indexOfDesign(List<CartLine> lines, String designId) {
+    private int indexOfReference(List<CartLine> lines, ProductType productType, String referenceId) {
         for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).designId().equals(designId)) {
+            CartLine line = lines.get(i);
+            if (line.productType() == productType && referenceId.equals(line.referenceId())) {
                 return i;
             }
         }

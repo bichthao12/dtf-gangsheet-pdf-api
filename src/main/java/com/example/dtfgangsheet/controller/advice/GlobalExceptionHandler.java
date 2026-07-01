@@ -55,15 +55,13 @@ public class GlobalExceptionHandler {
                 .map(fe -> ApiErrorDetail.of(
                         ApiResultCode.VALIDATION_ERROR.getCode(),
                         fe.getField(),
-                        fe.getDefaultMessage()
-                ))
+                        fe.getDefaultMessage()))
                 .toList();
 
         return ApiResponse.error(
                 ApiResultCode.VALIDATION_ERROR.getCode(),
                 ApiResultCode.VALIDATION_ERROR.getMessage(),
-                errors
-        );
+                errors);
     }
 
     /** Query/path param sai kiểu — ví dụ status=INVALID */
@@ -88,16 +86,14 @@ public class GlobalExceptionHandler {
                     return ApiErrorDetail.of(
                             ApiResultCode.VALIDATION_ERROR.getCode(),
                             field,
-                            cv.getMessage()
-                    );
+                            cv.getMessage());
                 })
                 .toList();
 
         return ApiResponse.error(
                 ApiResultCode.VALIDATION_ERROR.getCode(),
                 ApiResultCode.VALIDATION_ERROR.getMessage(),
-                errors
-        );
+                errors);
     }
 
     // -------------------------------------------------------------------------
@@ -110,8 +106,7 @@ public class GlobalExceptionHandler {
         return ApiResponse.error(
                 ex.getResultCode().getCode(),
                 ex.getResultCode().getMessage(),
-                ex.getDetails()
-        );
+                ex.getDetails());
     }
 
     @ExceptionHandler(ImageBatchLoadException.class)
@@ -120,19 +115,20 @@ public class GlobalExceptionHandler {
         return ApiResponse.error(
                 ex.getResultCode().getCode(),
                 ex.getResultCode().getMessage(),
-                ex.getErrors()
-        );
+                ex.getErrors());
     }
 
     /**
      * ImageLoadException và subclass chưa được handle ở trên.
-     * Dùng HttpServletResponse để set status từ exception thay vì hardcode @ResponseStatus —
-     * tránh override httpStatus của subclass (TransientImageLoadException=502, ImageNotFoundException=404).
+     * Dùng HttpServletResponse để set status từ exception thay vì
+     * hardcode @ResponseStatus —
+     * tránh override httpStatus của subclass (TransientImageLoadException=502,
+     * ImageNotFoundException=404).
      */
     @ExceptionHandler(ImageLoadException.class)
     public ApiResponse<Void> handleImageLoad(ImageLoadException ex, HttpServletResponse response) {
         response.setStatus(ex.getHttpStatus().value());
-        return ApiResponse.error(ex.getResultCode().getCode(), ex.getMessage());
+        return ApiResponse.error(ex.getResultCode().getCode(), ex.getResultCode().getMessage());
     }
 
     @ExceptionHandler(ServerException.class)
@@ -142,9 +138,8 @@ public class GlobalExceptionHandler {
         return new ApiResponse<>(
                 ex.getResultCode().getCode(),
                 ex.getResultCode().getMessage(),
-                requestId,   // trả requestId về client để support có thể lookup log
-                null, null
-        );
+                requestId, // trả requestId về client để support có thể lookup log
+                null, null);
     }
 
     /** AppException còn lại — httpStatus lấy từ exception */
@@ -161,7 +156,6 @@ public class GlobalExceptionHandler {
         log.error("Unexpected error", ex);
         return ApiResponse.error(
                 ApiResultCode.INTERNAL_ERROR.getCode(),
-                ApiResultCode.INTERNAL_ERROR.getMessage()
-        );
+                ApiResultCode.INTERNAL_ERROR.getMessage());
     }
 }

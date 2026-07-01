@@ -16,7 +16,7 @@ import java.util.List;
 
 public final class GangSheetSnapshotMapper {
 
-    public static final String DEFAULT_NAME = "New Gang Sheet";
+    public static final String DEFAULT_NAME = "Untitled Gang Sheet";
 
     private GangSheetSnapshotMapper() {
     }

@@ -49,11 +49,16 @@ public class GangSheetService {
         return GangSheetSnapshotMapper.toSaveResponse(persistDraft(id, request));
     }
 
-    /** @param id {@code null} to create, non-null to update an existing draft */
+    /**
+     * Save draft and add/update cart line.
+     * Cart qty: omitted in request → 1 on first add, unchanged on re-save from cart edit.
+     */
     @Transactional
     public SaveAndAddToCartResponse saveAndAddToCart(String id, SaveAndAddToCartRequest request) {
         SavedGangSheet gangSheet = persistDraft(id, request.toSaveRequest());
-        int cartQuantity = cartService.ensureItem(gangSheet.id(), request.resolvedQuantity());
+        int cartQuantity = cartService.ensureItem(
+                gangSheet.id(),
+                cartService.resolveEnsureQuantity(gangSheet.id(), request.quantity()));
         return GangSheetSnapshotMapper.toSaveAndAddToCartResponse(gangSheet, cartQuantity);
     }
 

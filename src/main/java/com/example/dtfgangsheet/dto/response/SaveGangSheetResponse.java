@@ -9,6 +9,10 @@ import com.example.dtfgangsheet.model.SheetSpec;
 
 import java.time.Instant;
 
+/**
+ * Save draft summary. Does <strong>not</strong> include {@code items} — use
+ * {@code GET /api/gang-sheets/{design_id}} to restore full canvas layout.
+ */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record SaveGangSheetResponse(
         @JsonProperty("design_id")

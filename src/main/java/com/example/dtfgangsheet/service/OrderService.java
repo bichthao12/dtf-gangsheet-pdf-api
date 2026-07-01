@@ -1,22 +1,18 @@
 package com.example.dtfgangsheet.service;
 
+import com.example.dtfgangsheet.commerce.handler.CheckoutLineHandler;
+import com.example.dtfgangsheet.commerce.handler.ProductLineHandlerRegistry;
 import com.example.dtfgangsheet.dto.response.CreateOrderResponse;
 import com.example.dtfgangsheet.dto.response.OrderDetailResponse;
 import com.example.dtfgangsheet.dto.response.OrderSummaryResponse;
 import com.example.dtfgangsheet.dto.response.PageResponse;
 import com.example.dtfgangsheet.exception.CartEmptyException;
-import com.example.dtfgangsheet.exception.GangSheetNotFoundException;
 import com.example.dtfgangsheet.exception.OrderNotFoundException;
-import com.example.dtfgangsheet.mapper.GangSheetSnapshotMapper;
 import com.example.dtfgangsheet.mapper.OrderMapper;
 import com.example.dtfgangsheet.model.CartLine;
-import com.example.dtfgangsheet.model.GangSheetSnapshot;
-import com.example.dtfgangsheet.model.GangSheetStatus;
 import com.example.dtfgangsheet.model.Order;
 import com.example.dtfgangsheet.model.OrderLine;
 import com.example.dtfgangsheet.model.OrderStatus;
-import com.example.dtfgangsheet.model.SavedGangSheet;
-import com.example.dtfgangsheet.repository.GangSheetRepository;
 import com.example.dtfgangsheet.repository.OrderRepository;
 import org.springframework.stereotype.Service;
 
@@ -29,15 +25,15 @@ import java.util.UUID;
 public class OrderService {
 
     private final OrderRepository orderRepository;
-    private final GangSheetRepository gangSheetRepository;
     private final CartService cartService;
+    private final ProductLineHandlerRegistry handlerRegistry;
 
     public OrderService(OrderRepository orderRepository,
-                        GangSheetRepository gangSheetRepository,
-                        CartService cartService) {
+                        CartService cartService,
+                        ProductLineHandlerRegistry handlerRegistry) {
         this.orderRepository = orderRepository;
-        this.gangSheetRepository = gangSheetRepository;
         this.cartService = cartService;
+        this.handlerRegistry = handlerRegistry;
     }
 
     public CreateOrderResponse checkout() {
@@ -50,23 +46,8 @@ public class OrderService {
         List<OrderLine> orderLines = new ArrayList<>();
 
         for (CartLine cartLine : cartLines) {
-            SavedGangSheet gangSheet = gangSheetRepository.findById(cartLine.designId())
-                    .orElseThrow(() -> new GangSheetNotFoundException(cartLine.designId()));
-
-            if (gangSheet.snapshot() == null || gangSheet.snapshot().items() == null
-                    || gangSheet.snapshot().items().isEmpty()) {
-                throw new GangSheetNotFoundException(cartLine.designId());
-            }
-
-            orderLines.add(new OrderLine(
-                    UUID.randomUUID().toString(),
-                    gangSheet.id(),
-                    GangSheetSnapshotMapper.displayName(gangSheet.name()),
-                    cartLine.quantity(),
-                    copySnapshot(gangSheet.snapshot())
-            ));
-
-            confirmGangSheet(gangSheet, now);
+            CheckoutLineHandler handler = handlerRegistry.checkoutHandler(cartLine.productType());
+            orderLines.add(handler.toOrderLine(cartLine));
         }
 
         Order order = new Order(
@@ -78,6 +59,11 @@ public class OrderService {
         );
 
         orderRepository.save(order);
+
+        for (CartLine cartLine : cartLines) {
+            handlerRegistry.checkoutHandler(cartLine.productType()).afterCheckout(cartLine, now);
+        }
+
         cartService.clear();
         return OrderMapper.toCreateResponse(order);
     }
@@ -102,30 +88,5 @@ public class OrderService {
                 .toList();
 
         return new PageResponse<>(content, page, size, totalElements);
-    }
-
-    private void confirmGangSheet(SavedGangSheet gangSheet, Instant now) {
-        if (gangSheet.status() == GangSheetStatus.CONFIRMED) {
-            return;
-        }
-
-        SavedGangSheet confirmed = new SavedGangSheet(
-                gangSheet.id(),
-                gangSheet.name(),
-                GangSheetStatus.CONFIRMED,
-                gangSheet.snapshot(),
-                gangSheet.pdfId(),
-                gangSheet.createdAt(),
-                now,
-                now
-        );
-        gangSheetRepository.save(confirmed);
-    }
-
-    private GangSheetSnapshot copySnapshot(GangSheetSnapshot snapshot) {
-        return new GangSheetSnapshot(
-                snapshot.sheet(),
-                snapshot.items() != null ? List.copyOf(snapshot.items()) : List.of()
-        );
     }
 }

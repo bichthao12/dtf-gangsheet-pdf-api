@@ -34,6 +34,7 @@ public enum ApiResultCode {
     CART_EMPTY               ("MGS_38", "Cart is empty"),
     ORDER_NOT_FOUND          ("MGS_39", "Order not found"),
     GANG_SHEET_NOT_ADDABLE   ("MGS_41", "Confirmed gang sheet cannot be added to cart"),
+    UNSUPPORTED_PRODUCT_TYPE ("MGS_43", "Product type is not supported"),
 
     // Server errors
     PDF_IO_ERROR     ("MGS_8", "I/O error while generating PDF"),
