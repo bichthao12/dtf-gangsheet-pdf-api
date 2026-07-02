@@ -15,7 +15,9 @@ public record SavedGangSheet(
         Instant createdAt,
         Instant updatedAt,
         @JsonAlias("finalizedAt")
-        Instant confirmedAt
+        Instant confirmedAt,
+        boolean isDeleted,
+        Instant deletedAt
 ) {
 
     @JsonIgnore
@@ -31,6 +33,6 @@ public record SavedGangSheet(
 
     @JsonIgnore
     public boolean isEditable() {
-        return status == GangSheetStatus.DRAFT;
+        return status == GangSheetStatus.DRAFT && !isDeleted;
     }
 }

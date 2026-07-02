@@ -107,6 +107,8 @@ public class GangSheetService {
                     null,
                     now,
                     now,
+                    null,
+                    false,
                     null);
         } else {
             SavedGangSheet existing = requireEditable(id);
@@ -119,7 +121,9 @@ public class GangSheetService {
                     existing.pdfId(),
                     existing.createdAt(),
                     now,
-                    existing.confirmedAt());
+                    existing.confirmedAt(),
+                    existing.isDeleted(),
+                    existing.deletedAt());
         }
 
         gangSheetRepository.save(gangSheet);

@@ -60,9 +60,9 @@ public class ImageLoadingService {
         Map<String, CompletableFuture<ImageAsset>> futures = submitAll(unique);
         LoadResult result = collectResults(futures, indices);
 
-        if (!result.errors().isEmpty()) {
+        if (!result.details().isEmpty()) {
             assetStorageService.cleanup(result.loaded());
-            throw new ImageBatchLoadException(result.errors());
+            throw new ImageBatchLoadException(result.details());
         }
 
         // Map lại theo thứ tự sources — cùng source → cùng ImageAsset object
@@ -145,7 +145,7 @@ public class ImageLoadingService {
                                       Map<String, List<Integer>> indices) {
         Map<String, ImageAsset> bySource = new LinkedHashMap<>();
         List<ImageAsset>        loaded   = new ArrayList<>();
-        List<ApiErrorDetail>    errors   = new ArrayList<>();
+        List<ApiErrorDetail>    details  = new ArrayList<>();
 
         for (var entry : futures.entrySet()) {
             String src = entry.getKey();
@@ -155,14 +155,15 @@ public class ImageLoadingService {
                 loaded.add(asset);
             } catch (ImageLoadException ex) {
                 log.warn("Failed to load image: src={}", src, ex);
-                ApiResultCode code = resolveErrorCode(ex);
+                ApiResultCode code = ex.getResultCode();
                 for (int idx : indices.getOrDefault(src, List.of(-1))) {
-                    errors.add(ApiErrorDetail.imageError(idx, src, code.getCode(), code.getMessage()));
+                    details.add(ApiErrorDetail.imageError(
+                            idx, src, code.getCode(), code.getMessage()));
                 }
             }
         }
 
-        return new LoadResult(bySource, loaded, errors);
+        return new LoadResult(bySource, loaded, details);
     }
 
     private ImageAsset loadWithTiming(String source) {
@@ -185,17 +186,9 @@ public class ImageLoadingService {
         }
     }
 
-    private ApiResultCode resolveErrorCode(Exception ex) {
-        if (ex instanceof ImageNotFoundException)          return ApiResultCode.IMAGE_NOT_FOUND;
-        if (ex instanceof ImageSizeExceededException)      return ApiResultCode.IMAGE_SIZE_EXCEEDED;
-        if (ex instanceof UnsupportedImageFormatException) return ApiResultCode.UNSUPPORTED_IMAGE_FORMAT;
-        if (ex instanceof TransientImageLoadException)     return ApiResultCode.IMAGE_FETCH_ERROR;
-        return ApiResultCode.IMAGE_LOAD_ERROR;
-    }
-
     private record LoadResult(
             Map<String, ImageAsset> bySource,
             List<ImageAsset>        loaded,
-            List<ApiErrorDetail>    errors
+            List<ApiErrorDetail>    details
     ) {}
 }

@@ -1,14 +1,16 @@
 package com.example.dtfgangsheet.controller.advice;
 
+import com.example.dtfgangsheet.config.TraceIdFilter;
 import com.example.dtfgangsheet.dto.common.ApiErrorDetail;
-import com.example.dtfgangsheet.dto.common.ApiResponse;
 import com.example.dtfgangsheet.dto.common.ApiResultCode;
+import com.example.dtfgangsheet.dto.common.ErrorResponse;
 import com.example.dtfgangsheet.exception.*;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -18,25 +20,18 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.List;
-import java.util.UUID;
 
 /**
- * Maps exceptions to {@link ApiResponse} + HTTP status.
- * Services throw domain exceptions; controllers do not catch — keep mapping centralized here.
+ * Maps exceptions to {@link ErrorResponse} + HTTP status.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    // -------------------------------------------------------------------------
-    // Spring / Jackson errors
-    // -------------------------------------------------------------------------
-
-    /** JSON malformed hoặc sai kiểu — quantity: 3.5 vào int */
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ApiResponse<Void> handleNotReadable(HttpMessageNotReadableException ex) {
+    public ErrorResponse handleNotReadable(HttpMessageNotReadableException ex) {
         String message = ApiResultCode.INVALID_JSON.getMessage();
 
         Throwable cause = ex.getCause();
@@ -47,14 +42,17 @@ public class GlobalExceptionHandler {
                     .formatted(field, ife.getTargetType().getSimpleName(), ife.getValue());
         }
 
-        return ApiResponse.error(ApiResultCode.INVALID_JSON.getCode(), message);
+        return ErrorResponse.of(
+                ApiResultCode.INVALID_JSON.getCode(),
+                message,
+                HttpStatus.BAD_REQUEST
+        );
     }
 
-    /** @Valid trên object — ví dụ @RequestBody SomeObject */
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ApiResponse<Void> handleMethodArgumentNotValid(MethodArgumentNotValidException ex) {
-        List<ApiErrorDetail> errors = ex.getBindingResult()
+    public ErrorResponse handleMethodArgumentNotValid(MethodArgumentNotValidException ex) {
+        List<ApiErrorDetail> details = ex.getBindingResult()
                 .getFieldErrors().stream()
                 .map(fe -> ApiErrorDetail.of(
                         ApiResultCode.VALIDATION_ERROR.getCode(),
@@ -62,29 +60,31 @@ public class GlobalExceptionHandler {
                         fe.getDefaultMessage()))
                 .toList();
 
-        return ApiResponse.error(
-                ApiResultCode.VALIDATION_ERROR.getCode(),
+        return ErrorResponse.of(
+                ApiResultCode.VALIDATION_ERROR,
                 ApiResultCode.VALIDATION_ERROR.getMessage(),
-                errors);
+                HttpStatus.BAD_REQUEST,
+                details
+        );
     }
 
-    /** Query/path param sai kiểu — ví dụ status=INVALID */
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    public ApiResponse<Void> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
-        String field = ex.getName();
-        String message = "Invalid value for parameter '%s'".formatted(field);
-        return ApiResponse.error(ApiResultCode.BAD_REQUEST.getCode(), message);
+    public ErrorResponse handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String message = "Invalid value for parameter '%s'".formatted(ex.getName());
+        return ErrorResponse.of(
+                ApiResultCode.BAD_REQUEST.getCode(),
+                message,
+                HttpStatus.BAD_REQUEST
+        );
     }
 
-    /** @Valid trên List<@Valid T> hoặc @Validated trên controller method params */
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(ConstraintViolationException.class)
-    public ApiResponse<Void> handleConstraintViolation(ConstraintViolationException ex) {
-        List<ApiErrorDetail> errors = ex.getConstraintViolations().stream()
+    public ErrorResponse handleConstraintViolation(ConstraintViolationException ex) {
+        List<ApiErrorDetail> details = ex.getConstraintViolations().stream()
                 .map(cv -> {
                     String path = cv.getPropertyPath().toString();
-                    // Bỏ prefix method name: "nest.requests[0].quantity" → "requests[0].quantity"
                     int dot = path.indexOf('.');
                     String field = dot >= 0 ? path.substring(dot + 1) : path;
                     return ApiErrorDetail.of(
@@ -94,73 +94,62 @@ public class GlobalExceptionHandler {
                 })
                 .toList();
 
-        return ApiResponse.error(
-                ApiResultCode.VALIDATION_ERROR.getCode(),
+        return ErrorResponse.of(
+                ApiResultCode.VALIDATION_ERROR,
                 ApiResultCode.VALIDATION_ERROR.getMessage(),
-                errors);
+                HttpStatus.BAD_REQUEST,
+                details
+        );
     }
-
-    // -------------------------------------------------------------------------
-    // App exceptions — từ cụ thể đến tổng quát
-    // -------------------------------------------------------------------------
 
     @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
     @ExceptionHandler(GangSheetLayoutException.class)
-    public ApiResponse<Void> handleGangSheetLayout(GangSheetLayoutException ex) {
-        return ApiResponse.error(
+    public ErrorResponse handleGangSheetLayout(GangSheetLayoutException ex) {
+        return ErrorResponse.of(
                 ex.getResultCode().getCode(),
                 ex.getResultCode().getMessage(),
-                ex.getDetails());
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                ex.getDetails()
+        );
     }
 
     @ExceptionHandler(ImageBatchLoadException.class)
-    public ApiResponse<Void> handleImageBatch(ImageBatchLoadException ex, HttpServletResponse response) {
-        response.setStatus(ex.getHttpStatus().value());
-        return ApiResponse.error(
+    public ErrorResponse handleImageBatch(ImageBatchLoadException ex, HttpServletResponse response) {
+        HttpStatus status = ex.getHttpStatus();
+        response.setStatus(status.value());
+        return ErrorResponse.of(
                 ex.getResultCode().getCode(),
                 ex.getResultCode().getMessage(),
-                ex.getErrors());
+                status,
+                ex.getDetails()
+        );
     }
 
-    /**
-     * ImageLoadException và subclass chưa được handle ở trên.
-     * Dùng HttpServletResponse để set status từ exception thay vì
-     * hardcode @ResponseStatus —
-     * tránh override httpStatus của subclass (TransientImageLoadException=502,
-     * ImageNotFoundException=404).
-     */
     @ExceptionHandler(ImageLoadException.class)
-    public ApiResponse<Void> handleImageLoad(ImageLoadException ex, HttpServletResponse response) {
-        response.setStatus(ex.getHttpStatus().value());
-        return ApiResponse.error(ex.getResultCode().getCode(), ex.getResultCode().getMessage());
+    public ErrorResponse handleImageLoad(ImageLoadException ex, HttpServletResponse response) {
+        HttpStatus status = ex.getHttpStatus();
+        response.setStatus(status.value());
+        return ErrorResponse.of(ex.getResultCode(), ex.getMessage(), status);
     }
 
     @ExceptionHandler(ServerException.class)
-    public ApiResponse<Void> handleServer(ServerException ex, HttpServletResponse response) {
+    public ErrorResponse handleServer(ServerException ex, HttpServletResponse response) {
         response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR.value());
-        String requestId = UUID.randomUUID().toString();
-        log.error("Server error requestId={}", requestId, ex);
-        return new ApiResponse<>(
-                ex.getResultCode().getCode(),
-                ex.getResultCode().getMessage(),
-                requestId,
-                null, null);
+        log.error("Server error traceId={}", MDC.get(TraceIdFilter.MDC_KEY), ex);
+        return ErrorResponse.of(ex.getResultCode(), HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    /** AppException còn lại — httpStatus lấy từ exception */
     @ExceptionHandler(AppException.class)
-    public ApiResponse<Void> handleApp(AppException ex, HttpServletResponse response) {
-        response.setStatus(ex.getHttpStatus().value());
-        return ApiResponse.error(ex.getResultCode().getCode(), ex.getMessage());
+    public ErrorResponse handleApp(AppException ex, HttpServletResponse response) {
+        HttpStatus status = ex.getHttpStatus();
+        response.setStatus(status.value());
+        return ErrorResponse.of(ex.getResultCode(), ex.getMessage(), status);
     }
 
-    /** Fallback — bắt tất cả exception không mong muốn */
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     @ExceptionHandler(Exception.class)
-    public ApiResponse<Void> handleUnexpected(Exception ex) {
+    public ErrorResponse handleUnexpected(Exception ex) {
         log.error("Unexpected error", ex);
-        return ApiResponse.error(
-                ApiResultCode.INTERNAL_ERROR.getCode(),
-                ApiResultCode.INTERNAL_ERROR.getMessage());
+        return ErrorResponse.of(ApiResultCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 }

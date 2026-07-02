@@ -1,5 +1,7 @@
 package com.example.dtfgangsheet.dto.common;
 
+import java.util.Optional;
+
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
@@ -42,4 +44,11 @@ public enum ApiResultCode {
 
     private final String code;
     private final String message;
+    public static Optional<ApiResultCode> fromCode(String code) {
+        if (code == null || code.isBlank()) return Optional.empty();
+        for (ApiResultCode value : values()) {
+            if (value.code.equals(code)) return Optional.of(value);
+        }
+        return Optional.empty();
+    }
 }

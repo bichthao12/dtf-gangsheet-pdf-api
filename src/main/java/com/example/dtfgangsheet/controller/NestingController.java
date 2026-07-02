@@ -32,7 +32,8 @@ public class NestingController {
         return ApiResponse.success(
                 ApiResultCode.PDF_CREATED.getCode(),
                 ApiResultCode.PDF_CREATED.getMessage(),
-                nestingService.nestAndGenerate(requests)
+                nestingService.nestAndGenerate(requests),
+                HttpStatus.CREATED
         );
     }
 }

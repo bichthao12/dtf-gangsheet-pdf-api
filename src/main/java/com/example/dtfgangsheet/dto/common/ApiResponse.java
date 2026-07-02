@@ -1,32 +1,41 @@
 package com.example.dtfgangsheet.dto.common;
 
+import com.example.dtfgangsheet.config.TraceIdFilter;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import org.springframework.http.HttpStatus;
 
-import java.util.List;
-import java.util.UUID;
+import java.time.Instant;
 
+/** Success envelope — controllers return this on HTTP 2xx. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record ApiResponse<T>(
 
+        int status,
         String code,
         String message,
-        String requestId,
-        T data,
-
-        @JsonInclude(JsonInclude.Include.NON_EMPTY)
-        List<ApiErrorDetail> errors
+        String traceId,
+        @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", timezone = "UTC")
+        Instant timestamp,
+        T data
 
 ) {
 
     public static <T> ApiResponse<T> success(String code, String message, T data) {
-        return new ApiResponse<>(code, message, UUID.randomUUID().toString(), data, null);
+        return success(code, message, data, HttpStatus.OK);
     }
 
-    public static ApiResponse<Void> error(String code, String message) {
-        return new ApiResponse<>(code, message, UUID.randomUUID().toString(), null, null);
-    }
-
-    public static ApiResponse<Void> error(String code, String message, List<ApiErrorDetail> errors) {
-        return new ApiResponse<>(code, message, UUID.randomUUID().toString(), null, errors);
+    public static <T> ApiResponse<T> success(String code, String message, T data, HttpStatus httpStatus) {
+        return new ApiResponse<>(
+                httpStatus.value(),
+                code,
+                message,
+                TraceIdFilter.currentTraceId(),
+                Instant.now(),
+                data
+        );
     }
 }

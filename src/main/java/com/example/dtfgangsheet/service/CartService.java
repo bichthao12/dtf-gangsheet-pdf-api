@@ -11,8 +11,11 @@ import com.example.dtfgangsheet.mapper.CartMapper;
 import com.example.dtfgangsheet.model.Cart;
 import com.example.dtfgangsheet.model.CartLine;
 import com.example.dtfgangsheet.model.ProductType;
+import com.example.dtfgangsheet.model.SavedGangSheet;
 import com.example.dtfgangsheet.repository.CartRepository;
+import com.example.dtfgangsheet.repository.GangSheetRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -23,10 +26,14 @@ public class CartService {
 
     private final CartRepository cartRepository;
     private final ProductLineHandlerRegistry handlerRegistry;
+    private final GangSheetRepository gangSheetRepository;
 
-    public CartService(CartRepository cartRepository, ProductLineHandlerRegistry handlerRegistry) {
+    public CartService(CartRepository cartRepository,
+                       ProductLineHandlerRegistry handlerRegistry,
+                       GangSheetRepository gangSheetRepository) {
         this.cartRepository = cartRepository;
         this.handlerRegistry = handlerRegistry;
+        this.gangSheetRepository = gangSheetRepository;
     }
 
     public CartResponse getCart() {
@@ -125,17 +132,25 @@ public class CartService {
         return toResponse(cartRepository.load());
     }
 
+    /**
+     * Removes cart line. For {@link ProductType#DTF_GANG_SHEET_BUILDER}, soft-deletes the
+     * linked draft design ({@code is_deleted=true}, {@code deleted_at}) — user must create a new gang sheet to order again.
+     */
+    @Transactional
     public CartResponse removeItem(String lineId) {
         Cart cart = cartRepository.load();
+        CartLine removed = cart.lines().stream()
+                .filter(line -> line.lineId().equals(lineId))
+                .findFirst()
+                .orElseThrow(() -> new CartLineNotFoundException(lineId));
+
         List<CartLine> lines = cart.lines().stream()
                 .filter(line -> !line.lineId().equals(lineId))
                 .toList();
 
-        if (lines.size() == cart.lines().size()) {
-            throw new CartLineNotFoundException(lineId);
-        }
-
         cartRepository.save(new Cart(lines, Instant.now()));
+        deleteBuilderDesignIfDraft(removed);
+
         return toResponse(cartRepository.load());
     }
 
@@ -179,5 +194,18 @@ public class CartService {
             }
         }
         return -1;
+    }
+
+    private void deleteBuilderDesignIfDraft(CartLine removedLine) {
+        if (removedLine.productType() != ProductType.DTF_GANG_SHEET_BUILDER) {
+            return;
+        }
+        String designId = removedLine.referenceId();
+        if (designId == null || designId.isBlank()) {
+            return;
+        }
+        gangSheetRepository.findById(designId)
+                .filter(SavedGangSheet::isEditable)
+                .ifPresent(sheet -> gangSheetRepository.softDeleteById(sheet.id()));
     }
 }

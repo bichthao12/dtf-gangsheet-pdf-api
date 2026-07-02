@@ -39,11 +39,18 @@ public class GangSheetEntity {
 
     private Instant confirmedAt;
 
+    @Column(nullable = false)
+    private boolean isDeleted;
+
+    /** Set when {@link #isDeleted} becomes true (e.g. removed from cart). */
+    private Instant deletedAt;
+
     protected GangSheetEntity() {
     }
 
     public GangSheetEntity(String id, String name, GangSheetStatus status, GangSheetSnapshot snapshot,
-                           String pdfId, Instant createdAt, Instant updatedAt, Instant confirmedAt) {
+                           String pdfId, Instant createdAt, Instant updatedAt, Instant confirmedAt,
+                           boolean isDeleted, Instant deletedAt) {
         this.id = id;
         this.name = name;
         this.status = status;
@@ -52,6 +59,8 @@ public class GangSheetEntity {
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
         this.confirmedAt = confirmedAt;
+        this.isDeleted = isDeleted;
+        this.deletedAt = deletedAt;
     }
 
     public String getId() { return id; }
@@ -62,4 +71,11 @@ public class GangSheetEntity {
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public Instant getConfirmedAt() { return confirmedAt; }
+    public boolean isDeleted() { return isDeleted; }
+    public Instant getDeletedAt() { return deletedAt; }
+
+    public void markDeleted(Instant deletedAt) {
+        this.isDeleted = true;
+        this.deletedAt = deletedAt;
+    }
 }

@@ -6,6 +6,7 @@ import com.example.dtfgangsheet.repository.jpa.GangSheetJpaRepository;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,17 +20,26 @@ public class GangSheetRepository {
     }
 
     public List<SavedGangSheet> findAll() {
-        return jpaRepository.findAllByOrderByUpdatedAtDesc().stream()
+        return jpaRepository.findAllByIsDeletedFalseOrderByUpdatedAtDesc().stream()
                 .map(PersistenceMapper::toGangSheet)
                 .toList();
     }
 
     public Optional<SavedGangSheet> findById(String id) {
-        return jpaRepository.findById(id).map(PersistenceMapper::toGangSheet);
+        return jpaRepository.findByIdAndIsDeletedFalse(id).map(PersistenceMapper::toGangSheet);
     }
 
     @Transactional
     public void save(SavedGangSheet gangSheet) {
         jpaRepository.save(PersistenceMapper.toGangSheetEntity(gangSheet));
+    }
+
+    /** Soft-delete: {@code is_deleted=true}, {@code deleted_at=now}; row kept for audit. */
+    @Transactional
+    public void softDeleteById(String id) {
+        jpaRepository.findById(id).ifPresent(entity -> {
+            entity.markDeleted(Instant.now());
+            jpaRepository.save(entity);
+        });
     }
 }

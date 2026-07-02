@@ -112,6 +112,29 @@
     .badge-must { background: #dcfce7; color: #166534; }
     .badge-should { background: var(--accent-soft); color: var(--accent); }
     .badge-out { background: #f1f5f9; color: var(--muted); }
+    .api-method {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.15em 0.5em;
+      border-radius: 4px;
+      margin-right: 0.4rem;
+      font-family: "Cascadia Code", "Consolas", monospace;
+      vertical-align: middle;
+    }
+    .api-get { background: #dbeafe; color: #1d4ed8; }
+    .api-post { background: #dcfce7; color: #166534; }
+    .api-patch { background: #fef3c7; color: #b45309; }
+    .api-delete { background: #fee2e2; color: #b91c1c; }
+    .api-block {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+      background: #fafbfc;
+    }
+    .api-block h4 { margin-top: 0; }
+    .api-block table { margin-bottom: 0; }
     .print-hint {
       background: #fffbeb;
       border: 1px dashed #d97706;
@@ -144,7 +167,7 @@
         Backend lưu snapshot và chốt design khi đặt hàng.
       </p>
       <p class="meta">
-        Phiên bản 1.0 (MVP) · Dự án: DTF Gangsheet PDF API · Ngày: 29/06/2026
+        Phiên bản 1.2 (MVP) · Dự án: DTF Gangsheet PDF API · Cập nhật API spec: 29/06/2026
       </p>
     </div>
   </header>
@@ -160,9 +183,18 @@
         <li><a href="#intro">1. Giới thiệu</a></li>
         <li><a href="#overview">2. Mô tả tổng quan</a></li>
         <li><a href="#flows">3. Luồng nghiệp vụ</a></li>
+        <li><a href="#flows-phases">3.1–3.8 Phases &amp; kiến trúc luồng</a></li>
         <li><a href="#functional">4. Yêu cầu chức năng</a></li>
         <li><a href="#states">5. Máy trạng thái</a></li>
         <li><a href="#api">6. Đặc tả API</a></li>
+        <li><a href="#api-envelope">6.1–6.3 Envelope &amp; endpoint index</a></li>
+        <li><a href="#api-schemas">6.4 Schema chung</a></li>
+        <li><a href="#api-gang-sheets">6.5 Gang Sheets</a></li>
+        <li><a href="#api-cart">6.6 Cart</a></li>
+        <li><a href="#api-orders">6.7 Orders</a></li>
+        <li><a href="#api-pdf">6.8 PDF &amp; Nesting</a></li>
+        <li><a href="#api-errors">6.9 Mã lỗi</a></li>
+        <li><a href="#api-samples">6.10 Sample responses</a></li>
         <li><a href="#data">7. Mô hình dữ liệu</a></li>
         <li><a href="#nfr">8. Yêu cầu phi chức năng</a></li>
         <li><a href="#layout">9. Builder vs Print</a></li>
@@ -217,6 +249,9 @@
           <tr><td><strong>Confirmed</strong></td><td>Design đã checkout, không sửa được</td></tr>
           <tr><td><strong>Quantity (cart)</strong></td><td>Số <strong>tấm gang sheet in</strong> (cùng layout), không phải số lần duplicate trên canvas</td></tr>
           <tr><td><strong>Item</strong></td><td>Một graphic trên sheet: URL ảnh + tọa độ + kích thước + rotation</td></tr>
+          <tr><td><strong>Line ID</strong></td><td>Id dòng trong cart — dùng cho PATCH/DELETE qty, khác <code>design_id</code></td></tr>
+          <tr><td><strong>Product type</strong></td><td>Loại sản phẩm ZE trên cart/order (<code>DTF_GANG_SHEET_BUILDER</code>, …)</td></tr>
+          <tr><td><strong>Guest session</strong></td><td>Định danh tạm khách không đăng nhập (Phase 2: <code>X-Guest-Session-Id</code>)</td></tr>
         </tbody>
       </table>
 
@@ -262,34 +297,230 @@ flowchart LR
 
       <h3>2.4 Giả định</h3>
       <ul>
-        <li>FE upload ảnh lên S3 trước khi save</li>
+        <li>FE upload ảnh lên S3 trước khi save; snapshot chỉ chứa URL <code>items[].img</code></li>
         <li>FE nest/drag trên canvas, gửi <code>sheet.height_inch</code> sau khi layout xong</li>
-        <li>Một cart global (chưa có auth) — mỗi instance BE một giỏ</li>
+        <li><strong>Guest-first:</strong> user không bắt buộc sign in/sign up; FE giữ <code>design_id</code> trong localStorage</li>
+        <li>Cart global per BE instance (MVP) — Phase 2: <code>X-Guest-Session-Id</code> hoặc user auth</li>
         <li>User có thể sửa draft <strong>kể cả sau</strong> Save &amp; Add to Cart; chỉ khóa khi checkout</li>
+        <li>Success: <code>ApiResponse</code> (HTTP 2xx). Failure: <code>ErrorResponse</code> (HTTP 4xx/5xx). Cả hai có <code>trace_id</code>; phân biệt nghiệp vụ qua <code>code</code> (MGS_xx)</li>
       </ul>
     </section>
 
     <!-- 3. FLOWS -->
     <section id="flows">
-      <h2>3. Luồng nghiệp vụ</h2>
+      <h2>3. Luồng nghiệp vụ — DTF Gang Sheet Builder</h2>
+      <p>
+        Tài liệu này mô tả <strong>end-to-end flow</strong> từ mở builder đến checkout và ops render PDF.
+        Phân tách rõ trách nhiệm FE vs BE; các mũi tên API là contract thực tế trong codebase.
+      </p>
 
-      <h3>3.1 Luồng chính — Build &amp; Order</h3>
+      <h3 id="flows-phases">3.1 Bản đồ phase (User journey)</h3>
+      <table>
+        <thead><tr><th>Phase</th><th>Mục tiêu</th><th>Actor chính</th><th>API / xử lý</th></tr></thead>
+        <tbody>
+          <tr><td><strong>P0 — Khởi tạo</strong></td><td>Canvas 22", config</td><td>FE (+ optional BE)</td><td><code>GET /api/gang-sheets/config</code> hoặc FE hardcode</td></tr>
+          <tr><td><strong>P1 — Upload &amp; layout</strong></td><td>Ảnh lên S3, nest/drag</td><td>FE only</td><td>Upload S3, gallery, auto-nest (ngoài BE MVP)</td></tr>
+          <tr><td><strong>P2 — Persist design</strong></td><td>Lưu snapshot draft</td><td>FE → BE</td><td><code>POST /api/gang-sheets</code> (upsert <code>design_id</code>)</td></tr>
+          <tr><td><strong>P3 — Cart</strong></td><td>Thêm/sửa giỏ, qty tấm in</td><td>FE → BE</td><td><code>POST /api/gang-sheets/cart</code>, <code>/api/cart/*</code></td></tr>
+          <tr><td><strong>P4 — Reload</strong></td><td>Mở lại design / auto-save</td><td>FE → BE</td><td><code>GET /api/gang-sheets/{id}</code>, list</td></tr>
+          <tr><td><strong>P5 — Checkout</strong></td><td>Chốt đơn, freeze snapshot</td><td>FE → BE</td><td><code>POST /api/orders</code></td></tr>
+          <tr><td><strong>P6 — Production</strong></td><td>Render file in</td><td>Ops → BE</td><td><code>POST /api/gang-sheets/pdf</code> (dev/ops; không phải user preview)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>3.2 Luồng chính — Build &amp; Order</h3>
       <div class="mermaid">
 flowchart TD
-    A[FE: Upload S3] --> B[FE: Nest / drag canvas 22 inch]
-    B --> C{User action}
-    C -->|Save| D[POST /api/gang-sheets]
-    C -->|Save and Add to Cart| E[POST /api/gang-sheets/cart]
-    D --> F[Draft trong DB]
-    E --> G[Draft + Cart line]
-    F --> H[Cart / Checkout]
+    subgraph FE["Builder FE"]
+      A0[Start / New sheet]
+      A1[Upload S3 + nest canvas 22 inch]
+      A2{User action}
+    end
+    subgraph BE["Spring Boot API"]
+      D[POST /api/gang-sheets]
+      E[POST /api/gang-sheets/cart]
+      H[GET /api/cart]
+      I[POST /api/orders]
+    end
+    subgraph DB["Database"]
+      F[(gang_sheets draft)]
+      G[(cart_lines)]
+      J[(orders + order_lines)]
+    end
+    A0 --> A1 --> A2
+    A2 -->|Save only| D --> F
+    A2 -->|Save + Cart| E --> F
+    E --> G
+    F --> H
     G --> H
-    H --> I[POST /api/orders]
-    I --> J[Order SUBMITTED + Design CONFIRMED]
-    J --> K[Ops render PDF]
+    H --> I --> J
+    I -->|confirm| F
+    I -->|clear| G
       </div>
 
-      <h3>3.2 Đối chiếu Ninja ↔ API</h3>
+      <h3>3.3 Luồng chi tiết — Save draft (<code>POST /api/gang-sheets</code>)</h3>
+      <div class="mermaid">
+sequenceDiagram
+    participant FE as Builder FE
+    participant C as GangSheetController
+    participant S as GangSheetService
+    participant R as GangSheetRepository
+    participant DB as gang_sheets
+
+    FE->>C: POST body sheet + items design_id?
+    C->>S: saveDraft(resolvedDesignId, request)
+    alt design_id null
+        S->>S: UUID mới status=draft
+    else design_id có
+        S->>R: findById requireEditable
+        Note over S: confirmed → MGS_35
+    end
+    S->>S: snapshotFromRequest FE snapshot tin cậy
+    S->>R: save
+    R->>DB: upsert JSON snapshot
+    S-->>C: SaveGangSheetResponse metadata only
+    C-->>FE: ApiResponse MGS_30 no items
+    Note over FE: Reload layout GET /gang-sheets/id
+      </div>
+      <ul>
+        <li>Response Save <strong>không có</strong> <code>items[]</code> — FE gọi <code>GET /api/gang-sheets/{id}</code> để restore canvas.</li>
+        <li>Auto-save: FE debounce POST lại với cùng <code>design_id</code>.</li>
+        <li>BE không nest/validate layout; <code>sheet.width_inch</code> persist từ config 22".</li>
+      </ul>
+
+      <h3>3.4 Luồng chi tiết — Save &amp; Add to Cart</h3>
+      <div class="mermaid">
+sequenceDiagram
+    participant FE as Builder FE
+    participant GS as GangSheetService
+    participant CS as CartService
+    participant H as GangSheetBuilderCartHandler
+    participant DB as DB
+
+    FE->>GS: saveAndAddToCart design_id? request
+    GS->>GS: persistDraft same as Save
+    GS->>CS: resolveEnsureQuantity design_id quantity?
+    Note over CS: null qty → 1 lần đầu giữ qty nếu đã trong cart
+    GS->>CS: ensureItem design_id qty
+    CS->>H: ensureLine validate draft
+    CS->>DB: upsert cart_line product_type=BUILDER
+    GS-->>FE: in_cart cart_quantity + metadata
+      </div>
+      <table>
+        <thead><tr><th>Hành vi qty</th><th>Rule</th></tr></thead>
+        <tbody>
+          <tr><td>Lần đầu add, không gửi <code>quantity</code></td><td>Mặc định <strong>1</strong> tấm</td></tr>
+          <tr><td>Re-save từ builder, không gửi <code>quantity</code></td><td><strong>Giữ</strong> qty hiện tại trong cart</td></tr>
+          <tr><td>Muốn đổi qty</td><td><code>PATCH /api/cart/items/{line_id}</code></td></tr>
+          <tr><td><code>POST /api/cart/items</code> vs Save+Cart</td><td><code>addItem</code> <strong>cộng dồn</strong> qty; <code>ensureItem</code> <strong>ghi đè</strong> qty</td></tr>
+        </tbody>
+      </table>
+
+      <h3>3.5 Luồng chi tiết — Checkout</h3>
+      <div class="mermaid">
+sequenceDiagram
+    participant FE as Builder FE
+    participant OC as OrderController
+    participant OS as OrderService
+    participant REG as ProductLineHandlerRegistry
+    participant CH as GangSheetBuilderCheckoutHandler
+    participant DB as DB
+
+    FE->>OC: POST /api/orders
+    OC->>OS: checkout
+    OS->>OS: load cart lines
+    loop mỗi cart line
+        OS->>REG: checkoutHandler product_type
+        REG->>CH: toOrderLine copy snapshot
+        OS->>DB: save order
+        CH->>CH: afterCheckout gang_sheet confirmed
+    end
+    OS->>DB: clear cart
+    OC-->>FE: ApiResponse MGS_33 order_id
+      </div>
+
+      <h3>3.6 Kiến trúc lớp Backend (Builder MVP)</h3>
+      <div class="mermaid">
+flowchart TB
+    subgraph controllers["Controllers"]
+      GC[GangSheetController]
+      CC[CartController]
+      OC[OrderController]
+    end
+    subgraph services["Services"]
+      GSS[GangSheetService]
+      CS[CartService]
+      OS[OrderService]
+    end
+    subgraph commerce["Commerce extensibility"]
+      REG[ProductLineHandlerRegistry]
+      BCH[GangSheetBuilderCartHandler]
+      BCO[GangSheetBuilderCheckoutHandler]
+    end
+    subgraph persistence["Persistence"]
+      GSR[GangSheetRepository]
+      CR[CartRepository]
+      OR[OrderRepository]
+    end
+    GC --> GSS
+    GC --> GSS
+    CC --> CS
+    OC --> OS
+    GSS --> CS
+    GSS --> GSR
+    CS --> REG --> BCH
+    CS --> CR
+    OS --> REG --> BCO
+    OS --> CS
+    OS --> OR
+    BCH --> GSR
+    BCO --> GSR
+      </div>
+      <div class="note">
+        <strong>ProductType:</strong> MVP chỉ implement <code>DTF_GANG_SHEET_BUILDER</code>.
+        <code>DTF_GANG_SHEET_UPLOAD</code>, <code>DTF_BY_SIZE</code> reserved → <code>MGS_43</code>.
+        Một cart / một checkout cho mọi product line (Phase ZE).
+      </div>
+
+      <h3>3.7 Luồng lỗi (Exception → API)</h3>
+      <p>Services <strong>throw</strong> domain exception; không build response trong service. Success → <code>ApiResponse</code> tại controller; failure → <code>ErrorResponse</code> tại <code>GlobalExceptionHandler</code>.</p>
+      <div class="mermaid">
+flowchart LR
+    SVC[Service throw AppException] --> DISP[Spring DispatcherServlet]
+    DISP --> GEH[GlobalExceptionHandler]
+    GEH --> V1[Validation MGS_3]
+    GEH --> V2[Domain MGS_34-41]
+    GEH --> V3[ImageBatch MGS_4 + details array]
+    GEH --> V4[Server MGS_7/9 HTTP 500]
+      </div>
+      <table>
+        <thead><tr><th>Tình huống Builder</th><th>Exception</th><th>HTTP</th><th>Code</th></tr></thead>
+        <tbody>
+          <tr><td>Body invalid</td><td>MethodArgumentNotValidException</td><td>400</td><td>MGS_3 + details[]</td></tr>
+          <tr><td>Design not found</td><td>GangSheetNotFoundException</td><td>404</td><td>MGS_34</td></tr>
+          <tr><td>Design confirmed, save</td><td>GangSheetConfirmedException</td><td>409</td><td>MGS_35</td></tr>
+          <tr><td>Confirmed, add cart</td><td>AppException</td><td>409</td><td>MGS_41</td></tr>
+          <tr><td>Cart empty checkout</td><td>CartEmptyException</td><td>400</td><td>MGS_38</td></tr>
+          <tr><td>PDF load ảnh fail</td><td>ImageBatchLoadException</td><td>400</td><td>MGS_4 + details[] per item</td></tr>
+        </tbody>
+      </table>
+
+      <h3>3.8 Luồng Ops — Render PDF (tách khỏi Builder UX)</h3>
+      <div class="mermaid">
+flowchart LR
+    OPS[Ops / Dev] --> API[POST /api/gang-sheets/pdf]
+    API --> GPS[GangSheetPdfService.generate]
+    GPS --> ILS[ImageLoadingService.loadOrdered]
+    ILS -->|fail| GEH[GlobalExceptionHandler]
+    ILS -->|ok| REN[PdfRenderService]
+    REN --> OUT[PDF file data/output]
+      </div>
+      <p>
+        PDF path <strong>không</strong> dùng khi user Save trên builder.
+        Layout in: BE <code>computePrintLayout</code> (cao hơn canvas, QR padding) — xem §9.
+      </p>
+
+      <h3>3.9 Đối chiếu Ninja ↔ API</h3>
       <table>
         <thead><tr><th>Bước Ninja</th><th>Hành vi</th><th>API / xử lý</th></tr></thead>
         <tbody>
@@ -298,13 +529,21 @@ flowchart TD
           <tr><td>Auto Build</td><td>Sắp xếp tự động</td><td>FE only</td></tr>
           <tr><td>Canvas 22"</td><td>Chiều rộng cố định</td><td><code>GET /api/gang-sheets/config</code> (optional)</td></tr>
           <tr><td>Save</td><td>Lưu design</td><td><code>POST /api/gang-sheets</code></td></tr>
-          <tr><td>Save &amp; Add to Cart</td><td>Lưu + qty</td><td><code>POST /api/gang-sheets/cart</code></td></tr>
+          <tr><td>Save &amp; Add to Cart</td><td>Lưu + qty mặc định 1</td><td><code>POST /api/gang-sheets/cart</code></td></tr>
           <tr><td>Mở design cũ</td><td>Continue editing</td><td><code>GET /api/gang-sheets/{id}</code></td></tr>
           <tr><td>My designs</td><td>Danh sách</td><td><code>GET /api/gang-sheets</code></td></tr>
           <tr><td>Cart</td><td>Xem/sửa giỏ</td><td><code>/api/cart/*</code></td></tr>
           <tr><td>Checkout</td><td>Đặt hàng</td><td><code>POST /api/orders</code></td></tr>
         </tbody>
       </table>
+
+      <h3>3.10 FE state tối thiểu (Guest)</h3>
+      <pre><code>localStorage.design_id     // sau POST save lần đầu
+localStorage.guest_session_id  // Phase 2 — header X-Guest-Session-Id
+
+// Mọi request builder/cart/order:
+headers: { /* X-Guest-Session-Id khi có */ }
+body save: { design_id, sheet, items[] }</code></pre>
     </section>
 
     <!-- 4. FUNCTIONAL -->
@@ -365,7 +604,7 @@ flowchart TD
           <tr><td>FR-SC-03</td><td>Re-save từ cart edit (không gửi <code>quantity</code>) → <strong>giữ</strong> qty hiện tại trong cart</td><td><span class="badge badge-must">Must</span></td></tr>
           <tr><td>FR-SC-04</td><td>Đổi qty: <code>PATCH /api/cart/items/{line_id}</code> — không qua builder</td><td><span class="badge badge-must">Must</span></td></tr>
           <tr><td>FR-SC-05</td><td>Response: thêm <code>in_cart=true</code>, <code>cart_quantity</code></td><td><span class="badge badge-must">Must</span></td></tr>
-          <tr><td>FR-SC-06</td><td>HTTP 201 khi tạo mới; 200 khi update</td><td><span class="badge badge-should">Should</span></td></tr>
+          <tr><td>FR-SC-06</td><td>Response qua <code>ApiResponse</code> HTTP 200, code <code>MGS_42</code></td><td><span class="badge badge-must">Must</span></td></tr>
           <tr><td>FR-SC-07</td><td>Design <code>confirmed</code> không add cart → <code>MGS_41</code></td><td><span class="badge badge-must">Must</span></td></tr>
         </tbody>
       </table>
@@ -391,9 +630,10 @@ flowchart TD
           <tr><td>FR-CT-01</td><td><code>GET /api/cart</code> — lines + tổng qty</td><td><span class="badge badge-must">Must</span></td></tr>
           <tr><td>FR-CT-02</td><td><code>POST /api/cart/items</code> — add design; merge qty nếu đã có</td><td><span class="badge badge-must">Must</span></td></tr>
           <tr><td>FR-CT-03</td><td><code>PATCH /api/cart/items/{line_id}</code> — đổi quantity</td><td><span class="badge badge-must">Must</span></td></tr>
-          <tr><td>FR-CT-04</td><td><code>DELETE /api/cart/items/{line_id}</code> — xóa line</td><td><span class="badge badge-must">Must</span></td></tr>
+          <tr><td>FR-CT-04</td><td><code>DELETE /api/cart/items/{line_id}</code> — xóa line; với builder: <strong>soft-delete</strong> gang sheet draft (<code>is_deleted=true</code>, <code>deleted_at</code>)</td><td><span class="badge badge-must">Must</span></td></tr>
+          <tr><td>FR-CT-07</td><td>Sau remove builder line: design ẩn khỏi API (<code>is_deleted=true</code>); <code>GET</code>/<code>POST save</code> → <code>MGS_34</code>; tạo design mới để add cart lại</td><td><span class="badge badge-must">Must</span></td></tr>
           <tr><td>FR-CT-05</td><td>Line không tồn tại → <code>MGS_37</code></td><td><span class="badge badge-must">Must</span></td></tr>
-          <tr><td>FR-CT-06</td><td>Mỗi line gắn 1 <code>design_id</code> (gang sheet draft)</td><td><span class="badge badge-must">Must</span></td></tr>
+          <tr><td>FR-CT-06</td><td>Mỗi line gắn 1 design (<code>product_type=DTF_GANG_SHEET_BUILDER</code>, <code>reference_id</code>=<code>design_id</code>)</td><td><span class="badge badge-must">Must</span></td></tr>
         </tbody>
       </table>
 
@@ -461,40 +701,149 @@ stateDiagram-v2
     <!-- 6. API -->
     <section id="api">
       <h2>6. Đặc tả API</h2>
+      <p>
+        Tài liệu chi tiết contract REST cho MVP. HTTP 2xx → <code>ApiResponse&lt;T&gt;</code>;
+        HTTP 4xx/5xx → <code>ErrorResponse</code>. JSON field dùng <strong>snake_case</strong> trừ khi ghi chú alias.
+      </p>
 
-      <h3>6.1 Envelope chung</h3>
+      <h3 id="api-envelope">6.1 Envelope — Success vs Error</h3>
+      <p>Hai type tách riêng. Client có thể gửi header <code>X-Trace-Id</code>; nếu thiếu, server tự sinh và echo lại trong header + body.</p>
+      <p><strong><code>ApiResponse</code></strong> — HTTP 200/201 (một số POST trả 201, <code>status</code> trong body khớp HTTP):</p>
       <pre><code>{
+  "status": 200,
   "code": "MGS_30",
   "message": "Gang sheet saved as draft",
-  "request_id": "uuid",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
   "data": { }
 }</code></pre>
-      <p>Lỗi validation: <code>code=MGS_3</code>, <code>errors[]</code> với <code>field</code>, <code>message</code>.</p>
+      <p><strong><code>ErrorResponse</code></strong> — lỗi đơn (<code>success=false</code>, không có <code>data</code>). <code>error</code> là tên HTTP status (vd. <code>BAD_REQUEST</code>); phân loại nghiệp vụ qua <code>code</code> (MGS_xx):</p>
+      <pre><code>{
+  "success": false,
+  "status": 404,
+  "error": "NOT_FOUND",
+  "code": "MGS_34",
+  "message": "Gang sheet not found: uuid",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z"
+}</code></pre>
+      <p><strong>Lỗi validation</strong> — HTTP 400, <code>code=MGS_3</code>, kèm <code>details[]</code>:</p>
+      <pre><code>{
+  "success": false,
+  "status": 400,
+  "error": "BAD_REQUEST",
+  "code": "MGS_3",
+  "message": "Validation failed",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "details": [
+    { "code": "MGS_3", "field": "items", "message": "items must not be empty" }
+  ]
+}</code></pre>
 
-      <h3>6.2 Danh sách endpoint MVP</h3>
+      <h3>6.2 Quy ước chung</h3>
       <table>
-        <thead><tr><th>Method</th><th>Path</th><th>Mô tả</th></tr></thead>
+        <thead><tr><th>Quy ước</th><th>Giá trị</th></tr></thead>
         <tbody>
-          <tr><td>GET</td><td><code>/api/gang-sheets/config</code></td><td>Builder config</td></tr>
-          <tr><td>POST</td><td><code>/api/gang-sheets</code></td><td>Save draft</td></tr>
-          <tr><td>POST</td><td><code>/api/gang-sheets/cart</code></td><td>Save &amp; Add to Cart</td></tr>
-          <tr><td>GET</td><td><code>/api/gang-sheets/{id}</code></td><td>Chi tiết design</td></tr>
-          <tr><td>GET</td><td><code>/api/gang-sheets</code></td><td>List designs</td></tr>
-          <tr><td>GET</td><td><code>/api/cart</code></td><td>Xem giỏ</td></tr>
-          <tr><td>POST</td><td><code>/api/cart/items</code></td><td>Thêm vào giỏ</td></tr>
-          <tr><td>PATCH</td><td><code>/api/cart/items/{line_id}</code></td><td>Sửa qty</td></tr>
-          <tr><td>DELETE</td><td><code>/api/cart/items/{line_id}</code></td><td>Xóa khỏi giỏ</td></tr>
-          <tr><td>POST</td><td><code>/api/orders</code></td><td>Checkout</td></tr>
-          <tr><td>GET</td><td><code>/api/orders</code></td><td>List orders</td></tr>
-          <tr><td>GET</td><td><code>/api/orders/{id}</code></td><td>Chi tiết order</td></tr>
-          <tr><td>POST</td><td><code>/api/gang-sheets/pdf</code></td><td>Render PDF (ops/dev)</td></tr>
+          <tr><td>Base URL</td><td><code>/api</code></td></tr>
+          <tr><td>Content-Type</td><td><code>application/json</code> (request &amp; response)</td></tr>
+          <tr><td>Auth (MVP)</td><td>Không — cart/design global per BE instance</td></tr>
+          <tr><td>Timestamp</td><td>Body <code>timestamp</code> — ISO-8601 UTC microsecond</td></tr>
+          <tr><td>Trace</td><td>Header <code>X-Trace-Id</code> (optional); body <code>trace_id</code> mỗi response</td></tr>
+          <tr><td>Enum trong JSON</td><td>Status order/design: lowercase. <code>product_type</code>: <code>DTF_GANG_SHEET_BUILDER</code></td></tr>
+          <tr><td>Naming</td><td>Envelope + hầu hết DTO: snake_case. Ngoại lệ: <code>OrderLine</code>, <code>GeneratePdfResponse</code></td></tr>
+          <tr><td>Phân trang</td><td><code>page</code> (0-based), <code>size</code> (1–50, default 20)</td></tr>
+          <tr><td>Unknown fields</td><td>Request body: bỏ qua (<code>@JsonIgnoreProperties</code>)</td></tr>
         </tbody>
       </table>
 
-      <h3>6.3 Contract — Save Draft</h3>
-      <p><strong>Request:</strong></p>
-      <pre><code>POST /api/gang-sheets
-{
+      <h3>6.3 Danh sách endpoint</h3>
+      <table>
+        <thead><tr><th>Method</th><th>Path</th><th>Mô tả</th><th>HTTP success</th></tr></thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/api/gang-sheets/config</code></td><td>Builder config</td><td>200</td></tr>
+          <tr><td>POST</td><td><code>/api/gang-sheets</code></td><td>Save draft</td><td>200</td></tr>
+          <tr><td>POST</td><td><code>/api/gang-sheets/cart</code></td><td>Save &amp; Add to Cart</td><td>200</td></tr>
+          <tr><td>GET</td><td><code>/api/gang-sheets/{id}</code></td><td>Chi tiết design + items</td><td>200</td></tr>
+          <tr><td>GET</td><td><code>/api/gang-sheets</code></td><td>List designs (phân trang)</td><td>200</td></tr>
+          <tr><td>POST</td><td><code>/api/gang-sheets/pdf</code></td><td>Render PDF từ items (ops/dev)</td><td>200</td></tr>
+          <tr><td>GET</td><td><code>/api/cart</code></td><td>Xem giỏ</td><td>200</td></tr>
+          <tr><td>POST</td><td><code>/api/cart/items</code></td><td>Thêm vào giỏ</td><td>201</td></tr>
+          <tr><td>PATCH</td><td><code>/api/cart/items/{line_id}</code></td><td>Sửa quantity</td><td>200</td></tr>
+          <tr><td>DELETE</td><td><code>/api/cart/items/{line_id}</code></td><td>Xóa line + soft-delete draft builder</td><td>200</td></tr>
+          <tr><td>POST</td><td><code>/api/orders</code></td><td>Checkout</td><td>201</td></tr>
+          <tr><td>GET</td><td><code>/api/orders</code></td><td>List orders</td><td>200</td></tr>
+          <tr><td>GET</td><td><code>/api/orders/{id}</code></td><td>Chi tiết order</td><td>200</td></tr>
+          <tr><td>POST</td><td><code>/api/nesting</code></td><td>Auto-nest + render PDF (ops/dev)</td><td>201</td></tr>
+        </tbody>
+      </table>
+
+      <h3 id="api-schemas">6.4 Schema dùng chung</h3>
+
+      <h4>SheetSpec</h4>
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Mô tả</th></tr></thead>
+        <tbody>
+          <tr><td><code>width_inch</code></td><td>number &gt; 0</td><td>✅</td><td>FE gửi; BE <strong>ép</strong> = config (22") khi persist</td></tr>
+          <tr><td><code>height_inch</code></td><td>number &gt; 0</td><td>✅</td><td>Chiều cao canvas sau nest</td></tr>
+          <tr><td><code>unit</code></td><td>string</td><td>—</td><td>Default <code>INCH</code> nếu bỏ qua</td></tr>
+        </tbody>
+      </table>
+
+      <h4>GangSheetItem (request &amp; snapshot)</h4>
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Mô tả</th></tr></thead>
+        <tbody>
+          <tr><td><code>img</code></td><td>string URL</td><td>✅</td><td>URL ảnh công khai (S3/CDN)</td></tr>
+          <tr><td><code>x</code>, <code>y</code></td><td>number</td><td>✅</td><td>Tọa độ inch trên sheet</td></tr>
+          <tr><td><code>width</code>, <code>height</code></td><td>number &gt; 0</td><td>✅</td><td>Kích thước inch</td></tr>
+          <tr><td><code>rotation</code></td><td>number</td><td>✅</td><td>Góc độ (độ)</td></tr>
+          <tr><td><code>flip_h</code>, <code>flip_v</code></td><td>boolean</td><td>—</td><td>Alias camelCase: <code>flipH</code>, <code>flipV</code></td></tr>
+          <tr><td><code>crop</code></td><td>object</td><td>—</td><td><code>{ x, y, w, h }</code> — w/h &gt; 0</td></tr>
+          <tr><td><code>dpi</code></td><td>integer</td><td>—</td><td>Lưu snapshot; dùng khi render PDF</td></tr>
+        </tbody>
+      </table>
+
+      <h4>PageResponse&lt;T&gt;</h4>
+      <pre><code>{
+  "content": [ ... ],
+  "page": 0,
+  "size": 20,
+  "totalElements": 42
+}</code></pre>
+
+      <!-- GANG SHEETS -->
+      <h3 id="api-gang-sheets">6.5 Gang Sheets</h3>
+
+      <div class="api-block" id="api-get-config">
+        <h4><span class="api-method api-get">GET</span> <code>/api/gang-sheets/config</code></h4>
+        <p>Trả cấu hình builder (chiều rộng sheet, padding). FE có thể hardcode hoặc gọi lúc khởi tạo.</p>
+        <table>
+          <thead><tr><th colspan="2">Response <code>data</code></th></tr></thead>
+          <tbody>
+            <tr><td><code>sheet_width_inch</code></td><td>22 (từ <code>app.pdf.sheet-width-inch</code>)</td></tr>
+            <tr><td><code>right_padding_inch</code></td><td>0.1</td></tr>
+            <tr><td><code>bottom_padding_inch</code></td><td>1.0</td></tr>
+            <tr><td><code>unit</code></td><td><code>INCH</code></td></tr>
+          </tbody>
+        </table>
+        <p><strong>Success:</strong> <code>MGS_32</code> · <strong>Lỗi:</strong> —</p>
+      </div>
+
+      <div class="api-block" id="api-post-save">
+        <h4><span class="api-method api-post">POST</span> <code>/api/gang-sheets</code></h4>
+        <p>Lưu draft (create hoặc upsert). Không thêm cart.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Mô tả</th></tr></thead>
+          <tbody>
+            <tr><td><code>design_id</code></td><td>string?</td><td>—</td><td><code>null</code>/bỏ qua → tạo mới; có giá trị → update draft</td></tr>
+            <tr><td><code>name</code></td><td>string?</td><td>—</td><td>Default <code>"Untitled Gang Sheet"</code> khi create; update giữ tên cũ nếu bỏ qua</td></tr>
+            <tr><td><code>sheet</code></td><td>SheetSpec</td><td>✅</td><td>—</td></tr>
+            <tr><td><code>items</code></td><td>GangSheetItem[]</td><td>✅ (≥1)</td><td>Snapshot layout</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Request ví dụ:</strong></p>
+        <pre><code>{
   "design_id": null,
   "name": "Jersey Sheet",
   "sheet": { "width_inch": 22, "height_inch": 48, "unit": "INCH" },
@@ -510,12 +859,8 @@ stateDiagram-v2
     }
   ]
 }</code></pre>
-      <div class="note">
-        <strong>Không có <code>items</code> trong response Save.</strong> API chỉ trả metadata (id, name, status, <code>item_count</code>, <code>sheet</code>, timestamps).
-        Để restore canvas sau Save hoặc auto-save, FE gọi <code>GET /api/gang-sheets/{design_id}</code> — response có đủ <code>sheet</code> + <code>items[]</code> (snake_case: <code>flip_h</code>, <code>flip_v</code>).
-      </div>
-      <p><strong>Response <code>data</code>:</strong></p>
-      <pre><code>{
+        <p><strong>Response <code>data</code></strong> — <em>không có <code>items</code></em>:</p>
+        <pre><code>{
   "design_id": "uuid",
   "name": "Jersey Sheet",
   "status": "draft",
@@ -524,40 +869,751 @@ stateDiagram-v2
   "created_at": "2026-06-29T10:00:00.000000Z",
   "updated_at": "2026-06-29T10:00:00.000000Z"
 }</code></pre>
-
-      <h3>6.4 Contract — Save &amp; Add to Cart</h3>
-      <p>Giống Save Draft. <code>quantity</code> <strong>không bắt buộc</strong> — FE thường bỏ qua (mặc định 1 lần đầu).</p>
-      <div class="note">
-        Response Save+Cart cũng <strong>không</strong> có <code>items</code> — dùng <code>GET /api/gang-sheets/{design_id}</code> để reload layout.
+        <div class="note">
+          Sau Save, FE gọi <code>GET /api/gang-sheets/{design_id}</code> để restore đầy đủ <code>items[]</code>.
+        </div>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_30</code></td><td>200</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_3</code></td><td>400</td><td>Validation (<code>items</code> rỗng, <code>sheet</code> null, …)</td></tr>
+            <tr><td><code>MGS_6</code></td><td>400</td><td>JSON malformed</td></tr>
+            <tr><td><code>MGS_34</code></td><td>404</td><td><code>design_id</code> không tồn tại hoặc đã soft-delete</td></tr>
+            <tr><td><code>MGS_35</code></td><td>409</td><td>Design <code>confirmed</code> — không sửa được</td></tr>
+          </tbody>
+        </table>
       </div>
-      <pre><code>POST /api/gang-sheets/cart
-{
-  "design_id": null,
-  "name": "Jersey Sheet",
-  "sheet": { "width_inch": 22, "height_inch": 48, "unit": "INCH" },
-  "items": [ ... ]
-}</code></pre>
-      <p>Response thêm: <code>in_cart: true</code>, <code>cart_quantity: 1</code>.</p>
-      <p>Đổi số lượng sau đó: <code>PATCH /api/cart/items/{line_id}</code> với <code>{ "quantity": 3 }</code>.</p>
 
-      <h3>6.5 Mã lỗi chính</h3>
+      <div class="api-block" id="api-post-save-cart">
+        <h4><span class="api-method api-post">POST</span> <code>/api/gang-sheets/cart</code></h4>
+        <p>Save draft + đảm bảo có cart line builder. Ninja-style: FE thường <strong>không</strong> gửi <code>quantity</code>.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Mô tả</th></tr></thead>
+          <tbody>
+            <tr><td><code>design_id</code>, <code>name</code>, <code>sheet</code>, <code>items</code></td><td colspan="3">Giống Save Draft</td></tr>
+            <tr><td><code>quantity</code></td><td>int ≥ 1</td><td>—</td><td>Lần đầu add: default <code>1</code>; re-save không gửi → <strong>giữ</strong> qty cart hiện tại</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Response <code>data</code></strong> — giống Save Draft, thêm:</p>
+        <pre><code>{
+  "design_id": "uuid",
+  "name": "Jersey Sheet",
+  "status": "draft",
+  "item_count": 1,
+  "sheet": { ... },
+  "in_cart": true,
+  "cart_quantity": 1,
+  "created_at": "...",
+  "updated_at": "..."
+}</code></pre>
+        <p>Đổi qty sau đó: <code>PATCH /api/cart/items/{line_id}</code>.</p>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_42</code></td><td>200</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_3</code>, <code>MGS_6</code>, <code>MGS_34</code>, <code>MGS_35</code></td><td colspan="2">Giống Save Draft</td></tr>
+            <tr><td><code>MGS_41</code></td><td>409</td><td>Design confirmed không add cart (qua flow cart trực tiếp)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="api-block" id="api-get-design">
+        <h4><span class="api-method api-get">GET</span> <code>/api/gang-sheets/{id}</code></h4>
+        <p>Chi tiết design — full snapshot để restore canvas.</p>
+        <table>
+          <thead><tr><th>Path</th><th>Mô tả</th></tr></thead>
+          <tbody>
+            <tr><td><code>id</code></td><td><code>design_id</code> (UUID)</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Response <code>data</code>:</strong></p>
+        <pre><code>{
+  "design_id": "uuid",
+  "name": "Jersey Sheet",
+  "status": "draft",
+  "item_count": 2,
+  "sheet": { "width_inch": 22, "height_inch": 48, "unit": "INCH" },
+  "items": [
+    {
+      "img": "https://cdn.example.com/a.png",
+      "x": 0.5, "y": 1.0,
+      "width": 4.0, "height": 5.0,
+      "rotation": 0,
+      "flip_h": false,
+      "flip_v": false,
+      "dpi": 300
+    }
+  ],
+  "in_cart": true,
+  "cart_quantity": 3,
+  "created_at": "...",
+  "updated_at": "...",
+  "confirmed_at": null
+}</code></pre>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_32</code></td><td>200</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_34</code></td><td>404</td><td>Không tồn tại / <code>is_deleted=true</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="api-block" id="api-list-designs">
+        <h4><span class="api-method api-get">GET</span> <code>/api/gang-sheets</code></h4>
+        <p>Danh sách design (chỉ active, <code>is_deleted=false</code>), sắp xếp <code>updated_at</code> desc.</p>
+        <table>
+          <thead><tr><th>Query</th><th>Type</th><th>Default</th><th>Mô tả</th></tr></thead>
+          <tbody>
+            <tr><td><code>status</code></td><td>string?</td><td>—</td><td><code>draft</code> | <code>confirmed</code> (alias: <code>finalized</code>, <code>locked</code> → confirmed)</td></tr>
+            <tr><td><code>page</code></td><td>int ≥ 0</td><td>0</td><td>Trang (0-based)</td></tr>
+            <tr><td><code>size</code></td><td>int 1–50</td><td>20</td><td>Kích thước trang</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Response <code>data</code>:</strong> <code>PageResponse</code> of summary — không có <code>items</code>/<code>sheet</code>:</p>
+        <pre><code>{
+  "content": [
+    {
+      "design_id": "uuid",
+      "name": "Jersey Sheet",
+      "status": "draft",
+      "item_count": 2,
+      "in_cart": false,
+      "cart_quantity": 0,
+      "created_at": "...",
+      "updated_at": "...",
+      "confirmed_at": null
+    }
+  ],
+  "page": 0,
+  "size": 20,
+  "totalElements": 1
+}</code></pre>
+        <p><strong>Success:</strong> <code>MGS_32</code> · <strong>Lỗi:</strong> <code>MGS_2</code> (query <code>status</code> invalid)</p>
+      </div>
+
+      <!-- CART -->
+      <h3 id="api-cart">6.6 Shopping Cart</h3>
+
+      <div class="api-block" id="api-get-cart">
+        <h4><span class="api-method api-get">GET</span> <code>/api/cart</code></h4>
+        <p>Trả toàn bộ cart lines + tổng quantity.</p>
+        <p><strong>Response <code>data</code>:</strong></p>
+        <pre><code>{
+  "lines": [
+    {
+      "line_id": "uuid",
+      "product_type": "DTF_GANG_SHEET_BUILDER",
+      "reference_id": "design-uuid",
+      "design_id": "design-uuid",
+      "name": "Jersey Sheet",
+      "quantity": 3,
+      "added_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "total_items": 3,
+  "updated_at": "..."
+}</code></pre>
+        <p><strong>Success:</strong> <code>MGS_32</code> · Cart rỗng → <code>lines: []</code>, <code>total_items: 0</code></p>
+      </div>
+
+      <div class="api-block" id="api-post-cart-item">
+        <h4><span class="api-method api-post">POST</span> <code>/api/cart/items</code></h4>
+        <p>Thêm sản phẩm vào giỏ. MVP: chỉ <code>DTF_GANG_SHEET_BUILDER</code> được implement.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Mô tả</th></tr></thead>
+          <tbody>
+            <tr><td><code>product_type</code></td><td>enum</td><td>—</td><td>Default <code>DTF_GANG_SHEET_BUILDER</code></td></tr>
+            <tr><td><code>reference_id</code></td><td>string</td><td>✅*</td><td>Builder: <code>design_id</code></td></tr>
+            <tr><td><code>design_id</code></td><td>string</td><td>alias</td><td>Backward-compatible alias của <code>reference_id</code></td></tr>
+            <tr><td><code>quantity</code></td><td>int ≥ 1</td><td>✅</td><td>Số tấm in</td></tr>
+            <tr><td><code>payload</code></td><td>object</td><td>—</td><td>Extensible per product (builder: thường empty)</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Request ví dụ:</strong></p>
+        <pre><code>{
+  "product_type": "DTF_GANG_SHEET_BUILDER",
+  "design_id": "uuid",
+  "quantity": 2
+}</code></pre>
+        <p><strong>Hành vi:</strong> Nếu cùng <code>product_type</code> + <code>reference_id</code> đã có → <strong>cộng dồn</strong> quantity.</p>
+        <p><strong>Response <code>data</code>:</strong> toàn bộ <code>CartResponse</code> (giống GET cart).</p>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_31</code></td><td>201</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_3</code></td><td>400</td><td>Thiếu <code>reference_id</code>/<code>design_id</code>, qty &lt; 1</td></tr>
+            <tr><td><code>MGS_34</code></td><td>404</td><td>Design không tồn tại</td></tr>
+            <tr><td><code>MGS_41</code></td><td>409</td><td>Design confirmed</td></tr>
+            <tr><td><code>MGS_43</code></td><td>400</td><td><code>product_type</code> chưa hỗ trợ</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="api-block" id="api-patch-cart-item">
+        <h4><span class="api-method api-patch">PATCH</span> <code>/api/cart/items/{line_id}</code></h4>
+        <p>Cập nhật quantity của một dòng giỏ.</p>
+        <table>
+          <thead><tr><th>Path</th><th>Mô tả</th></tr></thead>
+          <tbody>
+            <tr><td><code>line_id</code></td><td>UUID dòng cart (khác <code>design_id</code>)</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Request body:</strong></p>
+        <pre><code>{ "quantity": 5 }</code></pre>
+        <p><strong>Response <code>data</code>:</strong> <code>CartResponse</code> đầy đủ.</p>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_31</code></td><td>200</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_3</code></td><td>400</td><td><code>quantity</code> &lt; 1</td></tr>
+            <tr><td><code>MGS_37</code></td><td>404</td><td><code>line_id</code> không tồn tại</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="api-block" id="api-delete-cart-item">
+        <h4><span class="api-method api-delete">DELETE</span> <code>/api/cart/items/{line_id}</code></h4>
+        <p>Xóa dòng khỏi giỏ. Với builder line: <strong>soft-delete</strong> gang sheet draft liên kết.</p>
+        <table>
+          <thead><tr><th>Hành vi</th><th>Chi tiết</th></tr></thead>
+          <tbody>
+            <tr><td>Cart</td><td>Line bị xóa khỏi <code>cart_lines</code></td></tr>
+            <tr><td>Builder draft</td><td><code>is_deleted=true</code>, <code>deleted_at=now()</code></td></tr>
+            <tr><td>Sau remove</td><td><code>GET/POST save</code> cùng <code>design_id</code> → <code>MGS_34</code>; user phải Start New</td></tr>
+            <tr><td>Confirmed design</td><td>Không soft-delete (chỉ xóa cart line nếu có)</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Response <code>data</code>:</strong> <code>CartResponse</code> sau khi xóa.</p>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_32</code></td><td>200</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_37</code></td><td>404</td><td><code>line_id</code> không tồn tại</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ORDERS -->
+      <h3 id="api-orders">6.7 Orders</h3>
+
+      <div class="api-block" id="api-post-checkout">
+        <h4><span class="api-method api-post">POST</span> <code>/api/orders</code></h4>
+        <p>Checkout toàn bộ cart — không có request body.</p>
+        <table>
+          <thead><tr><th>Hành vi</th><th>Chi tiết</th></tr></thead>
+          <tbody>
+            <tr><td>Order</td><td>Tạo mới <code>status=submitted</code>, mỗi cart line → order line + <strong>snapshot copy</strong></td></tr>
+            <tr><td>Gang sheet</td><td>Draft trong cart → <code>confirmed</code>, <code>confirmed_at</code> set</td></tr>
+            <tr><td>Cart</td><td>Clear sau checkout (không soft-delete design)</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Response <code>data</code>:</strong></p>
+        <pre><code>{
+  "order_id": "uuid",
+  "status": "submitted",
+  "line_count": 1,
+  "total_quantity": 3,
+  "submitted_at": "..."
+}</code></pre>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_33</code></td><td>201</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_38</code></td><td>400</td><td>Cart rỗng</td></tr>
+            <tr><td><code>MGS_34</code></td><td>404</td><td>Design trong cart không còn tồn tại</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="api-block" id="api-get-order">
+        <h4><span class="api-method api-get">GET</span> <code>/api/orders/{id}</code></h4>
+        <p>Chi tiết order kèm lines và snapshot in.</p>
+        <p><strong>Response <code>data</code>:</strong></p>
+        <pre><code>{
+  "order_id": "uuid",
+  "status": "submitted",
+  "lines": [
+    {
+      "lineId": "uuid",
+      "productType": "DTF_GANG_SHEET_BUILDER",
+      "referenceId": "design-uuid",
+      "designName": "Jersey Sheet",
+      "quantity": 3,
+      "snapshot": {
+        "sheet": { "width_inch": 22, "height_inch": 48, "unit": "INCH" },
+        "items": [ ... ]
+      },
+      "payload": {}
+    }
+  ],
+  "total_quantity": 3,
+  "submitted_at": "...",
+  "updated_at": "..."
+}</code></pre>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_36</code></td><td>200</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_39</code></td><td>404</td><td>Order không tồn tại</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="api-block" id="api-list-orders">
+        <h4><span class="api-method api-get">GET</span> <code>/api/orders</code></h4>
+        <table>
+          <thead><tr><th>Query</th><th>Type</th><th>Default</th><th>Mô tả</th></tr></thead>
+          <tbody>
+            <tr><td><code>status</code></td><td>string?</td><td>—</td><td><code>submitted</code> | <code>in_production</code> | <code>printed</code> | <code>shipped</code></td></tr>
+            <tr><td><code>page</code>, <code>size</code></td><td>int</td><td>0, 20</td><td>Giống list designs</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Response <code>data</code>:</strong> <code>PageResponse</code> of summary (không có snapshot):</p>
+        <pre><code>{
+  "content": [
+    {
+      "order_id": "uuid",
+      "status": "submitted",
+      "line_count": 1,
+      "total_quantity": 3,
+      "submitted_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "page": 0,
+  "size": 20,
+  "totalElements": 1
+}</code></pre>
+        <p><strong>Success:</strong> <code>MGS_36</code></p>
+      </div>
+
+      <!-- PDF / NESTING -->
+      <h3 id="api-pdf">6.8 PDF &amp; Nesting (Ops / Dev)</h3>
+      <div class="warn">
+        Không phải user-facing preview. Dùng ops/dev render file in từ layout hoặc auto-nest.
+        Khi render: BE fetch ảnh từ URL, validate size/format.
+      </div>
+
+      <div class="api-block" id="api-post-pdf">
+        <h4><span class="api-method api-post">POST</span> <code>/api/gang-sheets/pdf</code></h4>
+        <p>Render PDF từ danh sách items đã đặt sẵn (không auto-nest).</p>
+        <p><strong>Request body:</strong> array of <code>GangSheetItem</code> (≥1):</p>
+        <pre><code>[
+  {
+    "img": "https://cdn.example.com/a.png",
+    "x": 0.5, "y": 1.0,
+    "width": 4.0, "height": 5.0,
+    "rotation": 0
+  }
+]</code></pre>
+        <p><strong>Response <code>data</code>:</strong></p>
+        <pre><code>{
+  "id": "pdf-uuid",
+  "fileName": "gangsheet-....pdf",
+  "downloadUrl": "/api/files/....pdf",
+  "itemCount": 1,
+  "sheet": { "width": 22.0, "height": 49.1, "unit": "INCH" },
+  "warnings": ["Low DPI on item 0"]
+}</code></pre>
+        <table>
+          <thead><tr><th>Code</th><th>HTTP</th><th>Khi nào</th></tr></thead>
+          <tbody>
+            <tr><td><code>MGS_1</code></td><td>200</td><td>Thành công</td></tr>
+            <tr><td><code>MGS_3</code></td><td>400</td><td>Validation items</td></tr>
+            <tr><td><code>MGS_4</code>, <code>MGS_10</code>–<code>MGS_13</code></td><td>400/404/502</td><td>Lỗi load ảnh (từng item hoặc batch)</td></tr>
+            <tr><td><code>MGS_14</code></td><td>422</td><td>Layout không hợp lệ khi render</td></tr>
+            <tr><td><code>MGS_7</code></td><td>500</td><td>PDF generation failed</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="api-block" id="api-post-nesting">
+        <h4><span class="api-method api-post">POST</span> <code>/api/nesting</code></h4>
+        <p>Auto-nest ảnh lên sheet 22" rồi render PDF. Body: array (≥1).</p>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Mô tả</th></tr></thead>
+          <tbody>
+            <tr><td><code>img</code></td><td>string URL</td><td>✅</td><td>Ảnh nguồn</td></tr>
+            <tr><td><code>quantity</code></td><td>int ≥ 1</td><td>✅</td><td>Số bản copy cần nest</td></tr>
+            <tr><td><code>width</code>, <code>height</code></td><td>number &gt; 0</td><td>✅</td><td>Kích thước inch mỗi bản</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Request ví dụ:</strong></p>
+        <pre><code>[
+  {
+    "img": "https://cdn.example.com/logo.png",
+    "quantity": 10,
+    "width": 4.0,
+    "height": 5.0
+  }
+]</code></pre>
+        <p><strong>Response <code>data</code>:</strong> cùng schema <code>GeneratePdfResponse</code> như PDF endpoint.</p>
+        <p><strong>Success:</strong> <code>MGS_1</code> HTTP 201 · Lỗi ảnh/PDF giống §6.8 PDF.</p>
+      </div>
+
+      <h3 id="api-errors">6.9 Bảng mã lỗi</h3>
       <table>
-        <thead><tr><th>Code</th><th>HTTP</th><th>Ý nghĩa</th></tr></thead>
+        <thead><tr><th>Code</th><th>HTTP</th><th>Message (mặc định)</th><th>Ngữ cảnh</th></tr></thead>
         <tbody>
-          <tr><td>MGS_30</td><td>200</td><td>Save thành công</td></tr>
-          <tr><td>MGS_42</td><td>200/201</td><td>Save + cart thành công</td></tr>
-          <tr><td>MGS_33</td><td>201</td><td>Order submitted</td></tr>
-          <tr><td>MGS_3</td><td>400</td><td>Validation</td></tr>
-          <tr><td>MGS_34</td><td>404</td><td>Design không tồn tại</td></tr>
-          <tr><td>MGS_35</td><td>409</td><td>Design confirmed, không sửa</td></tr>
-          <tr><td>MGS_37</td><td>404</td><td>Cart line không tồn tại</td></tr>
-          <tr><td>MGS_38</td><td>400</td><td>Cart rỗng</td></tr>
-          <tr><td>MGS_41</td><td>409</td><td>Confirmed không add cart</td></tr>
+          <tr><td><code>MGS_1</code></td><td>200/201</td><td>PDF created successfully</td><td>PDF / Nesting</td></tr>
+          <tr><td><code>MGS_2</code></td><td>400</td><td>Invalid request</td><td>Query/path param sai</td></tr>
+          <tr><td><code>MGS_3</code></td><td>400</td><td>Validation failed</td><td>@Valid body/param</td></tr>
+          <tr><td><code>MGS_4</code></td><td>400</td><td>Cannot load image</td><td>Ảnh local/đọc file</td></tr>
+          <tr><td><code>MGS_6</code></td><td>400</td><td>Malformed request body</td><td>JSON sai kiểu</td></tr>
+          <tr><td><code>MGS_7</code></td><td>500</td><td>Failed to generate pdf</td><td>Render PDF</td></tr>
+          <tr><td><code>MGS_9</code></td><td>500</td><td>Unexpected error</td><td>Fallback</td></tr>
+          <tr><td><code>MGS_10</code></td><td>400</td><td>Image size exceeds limit</td><td>Ảnh quá lớn</td></tr>
+          <tr><td><code>MGS_11</code></td><td>404</td><td>Image not found</td><td>URL 404</td></tr>
+          <tr><td><code>MGS_12</code></td><td>400</td><td>Unsupported image format</td><td>Format không hỗ trợ</td></tr>
+          <tr><td><code>MGS_13</code></td><td>502</td><td>Cannot load image from URL</td><td>Fetch URL lỗi</td></tr>
+          <tr><td><code>MGS_14</code></td><td>422</td><td>Invalid gang sheet layout</td><td>Layout khi render</td></tr>
+          <tr><td><code>MGS_30</code></td><td>200</td><td>Gang sheet saved as draft</td><td>Save draft</td></tr>
+          <tr><td><code>MGS_31</code></td><td>200/201</td><td>Item added to cart</td><td>Cart add/update</td></tr>
+          <tr><td><code>MGS_32</code></td><td>200</td><td>OK</td><td>GET list/config/cart</td></tr>
+          <tr><td><code>MGS_33</code></td><td>201</td><td>Order submitted successfully</td><td>Checkout</td></tr>
+          <tr><td><code>MGS_34</code></td><td>404</td><td>Gang sheet not found</td><td>Design missing/deleted</td></tr>
+          <tr><td><code>MGS_35</code></td><td>409</td><td>Gang sheet is confirmed…</td><td>Sửa design confirmed</td></tr>
+          <tr><td><code>MGS_36</code></td><td>200</td><td>OK</td><td>Orders list/detail</td></tr>
+          <tr><td><code>MGS_37</code></td><td>404</td><td>Cart line not found</td><td>PATCH/DELETE cart</td></tr>
+          <tr><td><code>MGS_38</code></td><td>400</td><td>Cart is empty</td><td>Checkout</td></tr>
+          <tr><td><code>MGS_39</code></td><td>404</td><td>Order not found</td><td>GET order</td></tr>
+          <tr><td><code>MGS_41</code></td><td>409</td><td>Confirmed gang sheet cannot be added…</td><td>Add cart</td></tr>
+          <tr><td><code>MGS_42</code></td><td>200</td><td>Gang sheet saved and added to cart</td><td>Save+Cart</td></tr>
+          <tr><td><code>MGS_43</code></td><td>400</td><td>Product type is not supported</td><td>Cart product_type</td></tr>
         </tbody>
       </table>
-    </section>
 
-    <!-- 7. DATA -->
+      <h3 id="api-samples">6.10 Sample responses (mock)</h3>
+      <p>HTTP 2xx → <code>ApiResponse</code>. HTTP 4xx/5xx → <code>ErrorResponse</code>. <code>trace_id</code> / <code>timestamp</code> thay đổi mỗi request.</p>
+
+      <h4>GET /api/gang-sheets/config</h4>
+      <p><strong>200 Success</strong></p>
+      <pre><code>{
+  "status": 200,
+  "code": "MGS_32",
+  "message": "OK",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "sheet_width_inch": 22.0,
+    "right_padding_inch": 0.1,
+    "bottom_padding_inch": 1.0,
+    "unit": "INCH"
+  }
+}</code></pre>
+
+      <h4>POST /api/gang-sheets</h4>
+      <p><strong>200 Success</strong> — <code>data</code> không có <code>items</code></p>
+      <pre><code>{
+  "status": 200,
+  "code": "MGS_30",
+  "message": "Gang sheet saved as draft",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "design_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Jersey Sheet",
+    "status": "draft",
+    "item_count": 1,
+    "sheet": { "width_inch": 22.0, "height_inch": 48.0, "unit": "INCH" },
+    "created_at": "2026-06-29T10:00:00.000000Z",
+    "updated_at": "2026-06-29T10:00:00.000000Z"
+  }
+}</code></pre>
+      <p><strong>400 Validation</strong></p>
+      <pre><code>{
+  "success": false,
+  "status": 400,
+  "error": "BAD_REQUEST",
+  "code": "MGS_3",
+  "message": "Validation failed",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "details": [
+    { "code": "MGS_3", "field": "items", "message": "items must not be empty" }
+  ]
+}</code></pre>
+      <p><strong>404 Not found</strong> — design đã xóa / không tồn tại</p>
+      <pre><code>{
+  "success": false,
+  "status": 404,
+  "error": "NOT_FOUND",
+  "code": "MGS_34",
+  "message": "Gang sheet not found: a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z"
+}</code></pre>
+      <p><strong>409 Conflict</strong> — design confirmed</p>
+      <pre><code>{
+  "success": false,
+  "status": 409,
+  "error": "CONFLICT",
+  "code": "MGS_35",
+  "message": "Gang sheet is confirmed and cannot be modified: a1b2c3d4-...",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z"
+}</code></pre>
+
+      <h4>POST /api/gang-sheets/cart</h4>
+      <p><strong>200 Success</strong></p>
+      <pre><code>{
+  "status": 200,
+  "code": "MGS_42",
+  "message": "Gang sheet saved and added to cart",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "design_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Jersey Sheet",
+    "status": "draft",
+    "item_count": 1,
+    "sheet": { "width_inch": 22.0, "height_inch": 48.0, "unit": "INCH" },
+    "in_cart": true,
+    "cart_quantity": 1,
+    "created_at": "2026-06-29T10:00:00.000000Z",
+    "updated_at": "2026-06-29T10:05:00.000000Z"
+  }
+}</code></pre>
+      <p>Lỗi giống POST save (<code>MGS_3</code>, <code>MGS_34</code>, <code>MGS_35</code>).</p>
+
+      <h4>GET /api/gang-sheets/{id}</h4>
+      <p><strong>200 Success</strong> — có đủ <code>items[]</code></p>
+      <pre><code>{
+  "status": 200,
+  "code": "MGS_32",
+  "message": "OK",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "design_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Jersey Sheet",
+    "status": "draft",
+    "item_count": 1,
+    "sheet": { "width_inch": 22.0, "height_inch": 48.0, "unit": "INCH" },
+    "items": [
+      {
+        "img": "https://cdn.example.com/a.png",
+        "x": 0.5, "y": 1.0,
+        "width": 4.0, "height": 5.0,
+        "rotation": 0.0,
+        "flip_h": false,
+        "flip_v": false,
+        "dpi": 300
+      }
+    ],
+    "in_cart": true,
+    "cart_quantity": 3,
+    "created_at": "2026-06-29T10:00:00.000000Z",
+    "updated_at": "2026-06-29T10:05:00.000000Z",
+    "confirmed_at": null
+  }
+}</code></pre>
+      <p><strong>404</strong> → <code>MGS_34</code> (giống trên).</p>
+
+      <h4>GET /api/gang-sheets?page=0&amp;size=20</h4>
+      <p><strong>200 Success</strong></p>
+      <pre><code>{
+  "status": 200,
+  "code": "MGS_32",
+  "message": "OK",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "content": [
+      {
+        "design_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "name": "Jersey Sheet",
+        "status": "draft",
+        "item_count": 1,
+        "in_cart": true,
+        "cart_quantity": 3,
+        "created_at": "2026-06-29T10:00:00.000000Z",
+        "updated_at": "2026-06-29T10:05:00.000000Z",
+        "confirmed_at": null
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 1
+  }
+}</code></pre>
+
+      <h4>GET /api/cart</h4>
+      <p><strong>200 Success</strong> (cart rỗng: <code>lines: []</code>, <code>total_items: 0</code>)</p>
+      <pre><code>{
+  "status": 200,
+  "code": "MGS_32",
+  "message": "OK",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "lines": [
+      {
+        "line_id": "c1d2e3f4-1111-2222-3333-444455556666",
+        "product_type": "DTF_GANG_SHEET_BUILDER",
+        "reference_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "design_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "name": "Jersey Sheet",
+        "quantity": 3,
+        "added_at": "2026-06-29T10:00:00.000000Z",
+        "updated_at": "2026-06-29T10:05:00.000000Z"
+      }
+    ],
+    "total_items": 3,
+    "updated_at": "2026-06-29T10:05:00.000000Z"
+  }
+}</code></pre>
+
+      <h4>POST /api/cart/items</h4>
+      <p><strong>201 Created</strong></p>
+      <pre><code>{
+  "status": 201,
+  "code": "MGS_31",
+  "message": "Item added to cart",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": { "...": "CartResponse đầy đủ như GET /api/cart" }
+}</code></pre>
+      <p><strong>409</strong> — design confirmed</p>
+      <pre><code>{
+  "success": false,
+  "status": 409,
+  "error": "CONFLICT",
+  "code": "MGS_41",
+  "message": "Confirmed gang sheet cannot be added to cart: a1b2c3d4-...",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z"
+}</code></pre>
+
+      <h4>PATCH /api/cart/items/{line_id}</h4>
+      <p><strong>200 Success</strong> → <code>MGS_31</code>, <code>data</code> = <code>CartResponse</code>.</p>
+      <p><strong>404</strong> → <code>MGS_37</code> Cart line not found.</p>
+
+      <h4>DELETE /api/cart/items/{line_id}</h4>
+      <p><strong>200 Success</strong> → <code>MGS_32</code>, <code>data</code> = cart sau khi xóa.</p>
+      <p><strong>404</strong> → <code>MGS_37</code>.</p>
+
+      <h4>POST /api/orders</h4>
+      <p><strong>201 Created</strong></p>
+      <pre><code>{
+  "status": 201,
+  "code": "MGS_33",
+  "message": "Order submitted successfully",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "order_id": "o1o2o3o4-e5f6-7890-abcd-ef1234567890",
+    "status": "submitted",
+    "line_count": 1,
+    "total_quantity": 3,
+    "submitted_at": "2026-06-29T10:00:00.000000Z"
+  }
+}</code></pre>
+      <p><strong>400 Cart empty</strong></p>
+      <pre><code>{
+  "success": false,
+  "status": 400,
+  "error": "BAD_REQUEST",
+  "code": "MGS_38",
+  "message": "Cart is empty",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z"
+}</code></pre>
+
+      <h4>GET /api/orders/{id}</h4>
+      <p><strong>200 Success</strong> — <code>lines[]</code> dùng camelCase (model <code>OrderLine</code>)</p>
+      <pre><code>{
+  "status": 200,
+  "code": "MGS_36",
+  "message": "OK",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "order_id": "o1o2o3o4-e5f6-7890-abcd-ef1234567890",
+    "status": "submitted",
+    "lines": [
+      {
+        "lineId": "l1l2l3l4-...",
+        "productType": "DTF_GANG_SHEET_BUILDER",
+        "referenceId": "a1b2c3d4-...",
+        "designName": "Jersey Sheet",
+        "quantity": 3,
+        "snapshot": {
+          "sheet": { "width_inch": 22.0, "height_inch": 48.0, "unit": "INCH" },
+          "items": [ { "img": "https://cdn.example.com/a.png", "x": 0.5, "y": 1.0, "width": 4.0, "height": 5.0, "rotation": 0.0, "flip_h": false, "flip_v": false } ]
+        },
+        "payload": {}
+      }
+    ],
+    "total_quantity": 3,
+    "submitted_at": "2026-06-29T10:00:00.000000Z",
+    "updated_at": "2026-06-29T10:00:00.000000Z"
+  }
+}</code></pre>
+      <p><strong>404</strong> → <code>MGS_39</code> Order not found.</p>
+
+      <h4>GET /api/orders</h4>
+      <p><strong>200 Success</strong> — <code>data</code> = <code>PageResponse</code> summary (không có snapshot).</p>
+
+      <h4>POST /api/gang-sheets/pdf</h4>
+      <p><strong>200 Success</strong> — <code>data</code> camelCase (<code>GeneratePdfResponse</code>)</p>
+      <pre><code>{
+  "status": 200,
+  "code": "MGS_1",
+  "message": "PDF created successfully",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "data": {
+    "id": "pdf-uuid",
+    "fileName": "gangsheet-abc.pdf",
+    "downloadUrl": "/api/files/gangsheet-abc.pdf",
+    "itemCount": 1,
+    "sheet": { "width": 22.0, "height": 49.1, "unit": "INCH" },
+    "warnings": []
+  }
+}</code></pre>
+      <p><strong>422 Layout</strong></p>
+      <pre><code>{
+  "success": false,
+  "status": 422,
+  "error": "UNPROCESSABLE_ENTITY",
+  "code": "MGS_14",
+  "message": "Invalid gang sheet layout",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "details": [
+    {
+      "code": "ITEM_EXCEEDS_SHEET_RIGHT",
+      "field": "items[0].x",
+      "message": "Item at index 0 exceeds sheet right boundary. right=25.0, sheetWidth=22.0"
+    }
+  ]
+}</code></pre>
+      <p><strong>400 Image batch</strong></p>
+      <pre><code>{
+  "success": false,
+  "status": 400,
+  "error": "BAD_REQUEST",
+  "code": "MGS_4",
+  "message": "Cannot load image",
+  "trace_id": "8d2f7a98b3c94d22",
+  "timestamp": "2026-06-29T10:00:00.000000Z",
+  "details": [
+    {
+      "code": "MGS_11",
+      "field": "items[0].img",
+      "message": "Image not found",
+      "index": 0,
+      "source": "https://cdn.example.com/missing.png"
+    }
+  ]
+}</code></pre>
+
+      <h4>POST /api/nesting</h4>
+      <p><strong>201 Created</strong> → <code>MGS_1</code>, <code>data</code> giống PDF. Lỗi giống PDF.</p>
+    </section>
     <section id="data">
       <h2>7. Mô hình dữ liệu</h2>
 
@@ -571,6 +1627,8 @@ stateDiagram-v2
           <tr><td><code>snapshot</code></td><td>JSON</td><td><code>{ sheet, items[] }</code></td></tr>
           <tr><td><code>pdf_id</code></td><td>string?</td><td>PDF đã render (ops)</td></tr>
           <tr><td><code>created_at</code>, <code>updated_at</code>, <code>confirmed_at</code></td><td>instant</td><td>Timestamps</td></tr>
+          <tr><td><code>is_deleted</code></td><td>boolean</td><td><code>false</code> = active; <code>true</code> khi remove khỏi cart</td></tr>
+          <tr><td><code>deleted_at</code></td><td>instant?</td><td>Thời điểm soft-delete (khi <code>is_deleted=true</code>)</td></tr>
         </tbody>
       </table>
 
@@ -578,9 +1636,11 @@ stateDiagram-v2
       <table>
         <thead><tr><th>Field</th><th>Mô tả</th></tr></thead>
         <tbody>
-          <tr><td><code>line_id</code></td><td>UUID</td></tr>
-          <tr><td><code>design_id</code></td><td>FK gang_sheets</td></tr>
-          <tr><td><code>quantity</code></td><td>Số tấm in</td></tr>
+          <tr><td><code>line_id</code></td><td>UUID — id dòng giỏ (PATCH/DELETE theo line này)</td></tr>
+          <tr><td><code>product_type</code></td><td><code>DTF_GANG_SHEET_BUILDER</code> | UPLOAD | BY_SIZE (MVP: builder only)</td></tr>
+          <tr><td><code>design_id</code></td><td><code>reference_id</code> — FK gang_sheets (builder)</td></tr>
+          <tr><td><code>quantity</code></td><td>Số tấm in (cùng layout)</td></tr>
+          <tr><td><code>payload</code></td><td>JSON extensible per product type (builder: thường empty)</td></tr>
         </tbody>
       </table>
 
@@ -590,7 +1650,9 @@ stateDiagram-v2
         <tbody>
           <tr><td><code>order.id</code></td><td>UUID</td></tr>
           <tr><td><code>order.status</code></td><td><code>submitted</code> | <code>in_production</code> | <code>printed</code> | <code>shipped</code></td></tr>
-          <tr><td><code>order_line.snapshot</code></td><td>Copy snapshot tại checkout</td></tr>
+          <tr><td><code>order_line.snapshot</code></td><td>Copy snapshot tại checkout (builder backward compat)</td></tr>
+          <tr><td><code>order_line.product_type</code></td><td>Discriminator product line</td></tr>
+          <tr><td><code>order_line.payload</code></td><td>JSON order payload (builder: design_id + snapshot)</td></tr>
           <tr><td><code>order_line.quantity</code></td><td>Số tấm in</td></tr>
         </tbody>
       </table>
@@ -622,7 +1684,7 @@ stateDiagram-v2
           <tr><td>NFR-04</td><td>Security</td><td>URL ảnh chỉ fetch khi render PDF (SSRF hardening — phase sau)</td></tr>
           <tr><td>NFR-05</td><td>Scalability</td><td>PostgreSQL + S3 prod (tương lai)</td></tr>
           <tr><td>NFR-06</td><td>Compatibility</td><td>JSON snake_case response; <code>design_id</code> trong request</td></tr>
-          <tr><td>NFR-07</td><td>Observability</td><td><code>request_id</code> mỗi response</td></tr>
+          <tr><td>NFR-07</td><td>Observability</td><td><code>trace_id</code> + header <code>X-Trace-Id</code> mỗi response</td></tr>
           <tr><td>NFR-08</td><td>Image limits</td><td>Max 1GB/file, 5GB/request, 200 items (config)</td></tr>
         </tbody>
       </table>
@@ -698,7 +1760,18 @@ stateDiagram-v2
         <li><strong>THEN</strong> trả đủ <code>sheet</code>, <code>items</code>, <code>in_cart</code>, <code>cart_quantity</code></li>
       </ul>
 
+      <h3>AC-08 — Remove khỏi cart xóa design</h3>
+      <ul>
+        <li><strong>GIVEN</strong> cart có builder line gắn <code>design_id</code> draft</li>
+        <li><strong>WHEN</strong> <code>DELETE /api/cart/items/{line_id}</code></li>
+        <li><strong>THEN</strong> line biến mất; <code>gang_sheets.is_deleted=true</code>, <code>deleted_at</code> được set;
+          <code>GET /api/gang-sheets/{design_id}</code> → <code>MGS_34</code>;
+          <code>POST /api/gang-sheets</code> với cùng <code>design_id</code> → <code>MGS_34</code>;
+          user phải tạo design mới (không gửi <code>design_id</code>) để add cart lại</li>
+      </ul>
+
       <h3>Sequence — Save &amp; Checkout</h3>
+      <p class="note">Chi tiết đầy đủ: xem <a href="#flows">§3.4 Save+Cart</a> và <a href="#flows">§3.5 Checkout</a>.</p>
       <div class="mermaid">
 sequenceDiagram
     participant U as User
@@ -708,15 +1781,12 @@ sequenceDiagram
 
     U->>FE: Chỉnh layout
     FE->>BE: POST /api/gang-sheets/cart
-    BE->>DB: Upsert gang_sheet draft
-    BE->>DB: Upsert cart_line
+    BE->>DB: Upsert gang_sheet draft + cart_line
     BE-->>FE: design_id in_cart cart_quantity
 
     U->>FE: Checkout
     FE->>BE: POST /api/orders
-    BE->>DB: Copy snapshots to order_lines
-    BE->>DB: gang_sheets to confirmed
-    BE->>DB: Clear cart
+    BE->>DB: order_lines + confirmed + clear cart
     BE-->>FE: order_id status=submitted
       </div>
     </section>
@@ -725,11 +1795,13 @@ sequenceDiagram
     <section id="phase2">
       <h2>11. Phase 2 (backlog)</h2>
       <ol>
+        <li><code>X-Guest-Session-Id</code> — cart/design scoped guest (không bắt sign in)</li>
+        <li>User auth + merge guest cart → user cart</li>
         <li><code>POST /api/images</code> + gallery</li>
         <li><code>POST /api/nesting/layout</code> (nest không kèm PDF)</li>
         <li>Preview PDF user</li>
         <li>Duplicate / delete draft</li>
-        <li>User auth, cart per user</li>
+        <li><code>DTF_GANG_SHEET_UPLOAD</code>, <code>DTF_BY_SIZE</code> handlers</li>
         <li><code>PATCH /api/orders/{id}/status</code> (ops)</li>
         <li>Pricing API</li>
         <li>PostgreSQL production config</li>

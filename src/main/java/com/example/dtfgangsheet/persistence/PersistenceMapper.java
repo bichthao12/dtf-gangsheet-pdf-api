@@ -25,7 +25,9 @@ public final class PersistenceMapper {
                 entity.getPdfId(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt(),
-                entity.getConfirmedAt()
+                entity.getConfirmedAt(),
+                entity.isDeleted(),
+                entity.getDeletedAt()
         );
     }
 
@@ -38,7 +40,9 @@ public final class PersistenceMapper {
                 gangSheet.pdfId(),
                 gangSheet.createdAt(),
                 gangSheet.updatedAt(),
-                gangSheet.confirmedAt()
+                gangSheet.confirmedAt(),
+                gangSheet.isDeleted(),
+                gangSheet.deletedAt()
         );
     }
 

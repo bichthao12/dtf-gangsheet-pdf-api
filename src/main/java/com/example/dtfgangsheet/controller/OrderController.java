@@ -38,7 +38,8 @@ public class OrderController {
         return ApiResponse.success(
                 ApiResultCode.ORDER_SUBMITTED.getCode(),
                 ApiResultCode.ORDER_SUBMITTED.getMessage(),
-                orderService.checkout()
+                orderService.checkout(),
+                HttpStatus.CREATED
         );
     }
 

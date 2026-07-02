@@ -61,7 +61,7 @@ HTTP status: `400 Bad Request`
   "success": false,
   "code": "VALIDATION_ERROR",
   "message": "Validation failed",
-  "errors": [
+  "details": [
     {
       "field": "[0].img",
       "message": "img must not be blank"
@@ -83,7 +83,7 @@ HTTP status: `400 Bad Request`
   "success": false,
   "code": "IMAGE_LOAD_ERROR",
   "message": "Cannot load image",
-  "errors": [
+  "details": [
     {
       "message": "Cannot load image from source: https://example.com/image.png"
     }

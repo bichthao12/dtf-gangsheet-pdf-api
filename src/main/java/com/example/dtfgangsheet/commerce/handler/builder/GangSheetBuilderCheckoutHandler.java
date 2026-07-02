@@ -77,7 +77,9 @@ public class GangSheetBuilderCheckoutHandler implements CheckoutLineHandler {
                 gangSheet.pdfId(),
                 gangSheet.createdAt(),
                 now,
-                now
+                now,
+                gangSheet.isDeleted(),
+                gangSheet.deletedAt()
         );
         gangSheetRepository.save(confirmed);
     }

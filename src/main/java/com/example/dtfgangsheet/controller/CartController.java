@@ -45,7 +45,8 @@ public class CartController {
         return ApiResponse.success(
                 ApiResultCode.CART_ITEM_ADDED.getCode(),
                 ApiResultCode.CART_ITEM_ADDED.getMessage(),
-                cartService.addItem(request)
+                cartService.addItem(request),
+                HttpStatus.CREATED
         );
     }
 
